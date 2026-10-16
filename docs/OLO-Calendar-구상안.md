@@ -11,7 +11,7 @@ ChatGPT 정리본(`calendar-app-plan.md`)은 참고만 하고, 외부 자료와 
 | # | 판단 | 이유 |
 |---|------|------|
 | 1 | **동기화 엔진을 직접 만들지 않는다.** 휴대폰 OS의 캘린더 저장소를 그대로 읽고 쓴다. | 갤럭시: 삼성 캘린더와 같은 Android Calendar Provider(`CalendarContract`)를 쓴다. Google 계정의 동기화 어댑터가 Google과 동기화한다. 아이폰: 아이폰 캘린더와 같은 EventKit 저장소를 쓴다. 설정에 추가한 Google 계정이 CalDAV로 동기화한다. 그래서 OLO Calendar는 **같은 데이터를 보여 주는 또 하나의 화면**이 된다. |
-| 2 | Google Calendar API는 **나중에, 필요할 때만** 쓴다(PC 웹 등). | API 방식은 서버, OAuth 토큰 보관, 충돌 처리, 푸시 채널 갱신을 모두 직접 해야 한다. 앱이 *Testing* 상태면 refresh token이 7일 만에 만료되고, *In production*으로 바꿔야 오래 유지된다. Calendar 범위는 Google 검토 대상이다. |
+| 2 | Google Calendar API는 **나중에, 필요할 때만** 쓴다(PC 웹 등). | API 방식은 서버, OAuth 토큰 보관, 충돌 처리, 푸시 채널 갱신을 모두 직접 해야 한다. 앱이 *Testing* 상태면 refresh token이 7일 만에 만료되고, *In production*으로 바꿔야 오래 유지된다(6개월 미사용 시 만료). Calendar 일정 읽기는 검토 대상 범위지만 본인·아는 소수만 쓰는 **개인 사용은 검토 예외**다(미검증 앱 경고는 표시됨). |
 | 3 | **Kotlin Multiplatform + Compose Multiplatform**으로 만든다. | OLO 가족 앱은 모두 Kotlin/Compose(`Theme.kt`)다. 그래서 OLO 토큰을 공용 모듈 하나로 iOS·Android가 같이 쓸 수 있다. Compose for iOS는 1.8.0(2025-05)부터 Stable이다. |
 | 4 | **Android(갤럭시)를 먼저**, iOS는 2단계로 한다. | 다른 OLO 앱과 같은 APK 배포 흐름을 쓸 수 있다. iOS는 macOS·Xcode가 필요하고 서명·배포 조건도 있다(5장). |
 
@@ -179,5 +179,9 @@ Google 캘린더 색은 원본에서 바꾸지 않는다. **OLO 화면에서만*
 - Testing → Production refresh token 만료: https://tech.sailjada.com/posts/2026-05-06-1924.html
 - Calendar API 푸시 알림: https://developers.google.com/workspace/calendar/api/guides/push
 - Calendar API 증분 동기화·410: https://cli.nylas.com/guides/google-calendar-api-sync-tokens
+- Calendar API 증분 동기화(원문): https://developers.google.com/workspace/calendar/api/guides/sync
+- OAuth 2.0 개요(Testing 7일 만료, 6개월 미사용, 토큰 100개 제한): https://developers.google.com/identity/protocols/oauth2
+
+> Google 개발자 문서는 2026-10-16 원문으로 재확인함. 푸시 알림 주소는 HTTPS + 유효한 SSL 인증서(자체 서명 불가)가 필요하다.
 - 무료 개인 팀 7일 만료: https://developer.apple.com/forums/thread/712540
 - OLO 세계관: https://github.com/kgcaudit/olo-design (`docs/DESIGN-BRIEF.md`, `tokens/*`, `appicons/README.md`)
