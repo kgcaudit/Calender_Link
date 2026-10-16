@@ -18,6 +18,9 @@ import android.provider.CalendarContract.Reminders
 import app.olo.calendar.model.AllDay
 import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.model.EventDraft
+import app.olo.calendar.model.MovePlan
+import app.olo.calendar.model.MoveResult
+import app.olo.calendar.model.mergeExdates
 import app.olo.calendar.model.Occurrence
 import app.olo.calendar.model.Recurrence
 import app.olo.calendar.model.StoredEvent
@@ -267,6 +270,178 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         }
         resolver.registerContentObserver(CalendarContract.CONTENT_URI, true, observer)
         awaitClose { resolver.unregisterContentObserver(observer) }
+    }
+
+    override suspend fun eventCounts(): Map<String, Int> = io {
+        resolver.query(Events.CONTENT_URI, arrayOf(Events.CALENDAR_ID), "${Events.DELETED} = 0", null, null)
+            .list { it.long(Events.CALENDAR_ID).toString() }
+            .groupingBy { it }.eachCount()
+    }
+
+    // --- moving a calendar's events into Google --------------------------------
+
+    private val moveColumns = arrayOf(
+        Events._ID, Events.TITLE, Events.EVENT_LOCATION, Events.DESCRIPTION, Events.DTSTART, Events.DTEND,
+        Events.DURATION, Events.EVENT_TIMEZONE, Events.EVENT_END_TIMEZONE, Events.ALL_DAY, Events.RRULE,
+        Events.RDATE, Events.EXRULE, Events.EXDATE, Events.ORIGINAL_ID, Events.ORIGINAL_INSTANCE_TIME,
+        Events.STATUS, Events.AVAILABILITY, Events.ACCESS_LEVEL,
+    )
+
+    private fun sourceRows(calendarId: String): List<Map<String, Any?>> =
+        resolver.query(
+            Events.CONTENT_URI, moveColumns, "${Events.CALENDAR_ID} = ? AND ${Events.DELETED} = 0",
+            arrayOf(calendarId), "${Events.DTSTART} ASC",
+        ).list { c ->
+            moveColumns.associateWith { col ->
+                val i = c.getColumnIndexOrThrow(col)
+                when {
+                    c.isNull(i) -> null
+                    c.getType(i) == Cursor.FIELD_TYPE_INTEGER -> c.getLong(i)
+                    else -> c.getString(i)
+                }
+            }
+        }
+
+    private fun Map<String, Any?>.id(): Long = this[Events._ID] as Long
+    private fun Map<String, Any?>.isException(): Boolean = this[Events.ORIGINAL_ID] != null
+    private fun Map<String, Any?>.isCancelled(): Boolean = (this[Events.STATUS] as Long?) == Events.STATUS_CANCELED.toLong()
+    private fun Map<String, Any?>.repeats(): Boolean =
+        !(this[Events.RRULE] as String?).isNullOrBlank() || !(this[Events.RDATE] as String?).isNullOrBlank()
+
+    /** Event ids (among [ids]) that have at least one guest besides the organizer. */
+    private fun eventsWithGuests(ids: List<Long>): Set<Long> = buildSet {
+        ids.chunked(400).forEach { chunk ->
+            resolver.query(
+                CalendarContract.Attendees.CONTENT_URI,
+                arrayOf(CalendarContract.Attendees.EVENT_ID, CalendarContract.Attendees.ATTENDEE_RELATIONSHIP),
+                "${CalendarContract.Attendees.EVENT_ID} IN (${chunk.joinToString(",")})", null, null,
+            ).list { c ->
+                if (c.int(CalendarContract.Attendees.ATTENDEE_RELATIONSHIP) != CalendarContract.Attendees.RELATIONSHIP_ORGANIZER) {
+                    c.long(CalendarContract.Attendees.EVENT_ID)
+                } else null
+            }.filterNotNull().forEach { add(it) }
+        }
+    }
+
+    override suspend fun planMove(fromCalendarId: String): MovePlan = io {
+        val rows = sourceRows(fromCalendarId)
+        val masters = rows.filterNot { it.isException() }
+        val changed = rows.count { it.isException() && !it.isCancelled() }
+        MovePlan(
+            fromCalendarId = fromCalendarId,
+            events = masters.size + changed,
+            recurring = masters.count { it.repeats() },
+            changedOccurrences = changed,
+            withGuests = eventsWithGuests(rows.map { it.id() }).size,
+        )
+    }
+
+    override suspend fun move(
+        fromCalendarId: String,
+        toCalendarId: String,
+        deleteOriginals: Boolean,
+        onProgress: (Int, Int) -> Unit,
+    ): MoveResult = io {
+        require(fromCalendarId != toCalendarId) { "same calendar" }
+        val rows = sourceRows(fromCalendarId)
+        val exceptions = rows.filter { it.isException() }
+        val masters = rows.filterNot { it.isException() }
+        val byMaster = exceptions.groupBy { it[Events.ORIGINAL_ID].toString() }
+        val standalone = exceptions.filterNot { it.isCancelled() }
+        val total = masters.size + standalone.size
+        var done = 0
+        var failed = 0
+        onProgress(0, total)
+
+        for (m in masters) {
+            val excluded = byMaster[m.id().toString()].orEmpty()
+                .mapNotNull { it[Events.ORIGINAL_INSTANCE_TIME] as Long? }
+                .map { Instant.fromEpochMilliseconds(it) }
+            if (copyEvent(m, toCalendarId, keepRule = true, excluded = excluded)) done++ else failed++
+            onProgress(done + failed, total)
+        }
+        // A changed occurrence becomes its own event on the new calendar; its slot in
+        // the rule was excluded above. Cancelled occurrences are simply excluded.
+        for (e in standalone) {
+            if (copyEvent(e, toCalendarId, keepRule = false, excluded = emptyList())) done++ else failed++
+            onProgress(done + failed, total)
+        }
+
+        var deleted = 0
+        if (deleteOriginals && failed == 0) {
+            (exceptions + masters).forEach { r ->
+                deleted += runCatching {
+                    resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, r.id()), null, null)
+                }.getOrDefault(0).coerceAtMost(1)
+            }
+        }
+        MoveResult(
+            moved = done,
+            deleted = deleted,
+            failed = failed,
+            message = if (failed > 0 && deleteOriginals) "옮기지 못한 일정이 있어 원본을 지우지 않았습니다." else null,
+        )
+    }
+
+    /** Inserts a copy of [r] into [toCalendarId]; returns false if the provider refused it. */
+    private fun copyEvent(r: Map<String, Any?>, toCalendarId: String, keepRule: Boolean, excluded: List<Instant>): Boolean {
+        val allDay = r[Events.ALL_DAY] == 1L
+        val start = r[Events.DTSTART] as Long? ?: return false
+        val explicitEnd = r[Events.DTEND] as Long?
+        val durMs = durationMillis(r[Events.DURATION] as String?)
+        val end = explicitEnd ?: if (durMs > 0) start + durMs else start + if (allDay) 86_400_000L else 3_600_000L
+        val v = ContentValues().apply {
+            put(Events.CALENDAR_ID, toCalendarId.toLong())
+            put(Events.TITLE, r[Events.TITLE] as String?)
+            put(Events.EVENT_LOCATION, r[Events.EVENT_LOCATION] as String?)
+            put(Events.DESCRIPTION, r[Events.DESCRIPTION] as String?)
+            put(Events.DTSTART, start)
+            put(Events.ALL_DAY, if (allDay) 1 else 0)
+            put(Events.EVENT_TIMEZONE, if (allDay) "UTC" else (r[Events.EVENT_TIMEZONE] as String?) ?: zone.id)
+            (r[Events.EVENT_END_TIMEZONE] as String?)?.takeIf { !allDay }?.let { put(Events.EVENT_END_TIMEZONE, it) }
+            (r[Events.AVAILABILITY] as Long?)?.let { put(Events.AVAILABILITY, it) }
+            (r[Events.ACCESS_LEVEL] as Long?)?.let { put(Events.ACCESS_LEVEL, it) }
+            if (keepRule && r.repeats()) {
+                putAny(Events.RRULE, r[Events.RRULE])
+                putAny(Events.RDATE, r[Events.RDATE])
+                putAny(Events.EXRULE, r[Events.EXRULE])
+                putAny(Events.EXDATE, mergeExdates(r[Events.EXDATE] as String?, excluded))
+                put(Events.DURATION, (r[Events.DURATION] as String?)?.takeIf { durMs > 0 } ?: if (allDay) {
+                    "P${maxOf(1L, (end - start) / 86_400_000L)}D"
+                } else {
+                    "P${maxOf(0L, (end - start) / 1000)}S"
+                })
+                putNull(Events.DTEND)
+            } else {
+                put(Events.DTEND, end)
+            }
+        }
+        val newId = runCatching { resolver.insert(Events.CONTENT_URI, v)?.let(ContentUris::parseId) }.getOrNull() ?: return false
+        copyReminders(r.id(), newId)
+        return true
+    }
+
+    private fun copyReminders(fromEvent: Long, toEvent: Long) {
+        val rs = resolver.query(
+            Reminders.CONTENT_URI, arrayOf(Reminders.MINUTES, Reminders.METHOD),
+            "${Reminders.EVENT_ID} = ?", arrayOf(fromEvent.toString()), null,
+        ).list { c -> c.int(Reminders.MINUTES) to c.int(Reminders.METHOD) }
+        rs.distinct().take(5).forEach { (min, method) ->
+            runCatching {
+                resolver.insert(Reminders.CONTENT_URI, ContentValues().apply {
+                    put(Reminders.EVENT_ID, toEvent)
+                    put(Reminders.MINUTES, min)
+                    // Google keeps popup and email; anything else becomes a popup.
+                    put(Reminders.METHOD, if (method == Reminders.METHOD_EMAIL) Reminders.METHOD_EMAIL else Reminders.METHOD_ALERT)
+                })
+            }
+        }
+        if (rs.isNotEmpty()) {
+            resolver.update(
+                ContentUris.withAppendedId(Events.CONTENT_URI, toEvent),
+                ContentValues().apply { put(Events.HAS_ALARM, 1) }, null, null,
+            )
+        }
     }
 
     // --- helpers -------------------------------------------------------------

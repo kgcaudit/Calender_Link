@@ -29,15 +29,21 @@ interface PermissionGate {
     fun openSettings()
 }
 
+/** System screens the app can send people to. */
+interface SystemSettings {
+    /** The phone's account-sync settings, where Google calendar sync is switched on. */
+    fun openSyncSettings()
+}
+
 @Composable
-fun App(store: CalendarStore, permissions: PermissionGate) {
+fun App(store: CalendarStore, permissions: PermissionGate, settings: SystemSettings? = null) {
     OloTheme {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             val granted by permissions.granted.collectAsState()
             if (granted) {
                 val scope = rememberCoroutineScope()
                 val controller = remember(store) { CalendarController(store, scope) }
-                CalendarScreen(controller)
+                CalendarScreen(controller, settings)
             } else {
                 val forGood by permissions.deniedForGood.collectAsState()
                 PermissionScreen(forGood, permissions::request, permissions::openSettings)

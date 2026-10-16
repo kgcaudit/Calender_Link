@@ -2,6 +2,8 @@ package app.olo.calendar.store
 
 import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.model.EventDraft
+import app.olo.calendar.model.MovePlan
+import app.olo.calendar.model.MoveResult
 import app.olo.calendar.model.Occurrence
 import app.olo.calendar.model.StoredEvent
 import app.olo.calendar.model.SyncStatus
@@ -40,4 +42,23 @@ interface CalendarStore {
 
     /** Emits whenever the database changes, from this app or any other. */
     fun changes(): Flow<Unit>
+
+    /** Number of (non-deleted) events stored in each calendar, by calendar id. */
+    suspend fun eventCounts(): Map<String, Int>
+
+    suspend fun planMove(fromCalendarId: String): MovePlan
+
+    /**
+     * Copies every event of one calendar into another (normally from a Samsung or
+     * phone-only calendar into Google), then deletes the originals when
+     * [deleteOriginals] is set and every copy succeeded. Repeat rules, changed
+     * occurrences and reminders are kept; guests are not copied, so no
+     * invitations go out.
+     */
+    suspend fun move(
+        fromCalendarId: String,
+        toCalendarId: String,
+        deleteOriginals: Boolean,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): MoveResult
 }

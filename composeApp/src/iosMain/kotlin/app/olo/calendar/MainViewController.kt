@@ -3,6 +3,8 @@ package app.olo.calendar
 import androidx.compose.ui.window.ComposeUIViewController
 import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.model.EventDraft
+import app.olo.calendar.model.MovePlan
+import app.olo.calendar.model.MoveResult
 import app.olo.calendar.model.Occurrence
 import app.olo.calendar.model.StoredEvent
 import app.olo.calendar.model.SyncStatus
@@ -40,4 +42,8 @@ private object PendingIosStore : CalendarStore {
     override suspend fun syncStatus(): SyncStatus = SyncStatus()
     override fun requestSync() = Unit
     override fun changes(): Flow<Unit> = emptyFlow()
+    override suspend fun eventCounts(): Map<String, Int> = emptyMap()
+    override suspend fun planMove(fromCalendarId: String): MovePlan = MovePlan(fromCalendarId, 0, 0, 0, 0)
+    override suspend fun move(fromCalendarId: String, toCalendarId: String, deleteOriginals: Boolean, onProgress: (Int, Int) -> Unit): MoveResult =
+        MoveResult(0, 0, 0)
 }

@@ -9,6 +9,7 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
+import kotlinx.datetime.daysUntil
 import kotlinx.datetime.isoDayNumber
 import kotlinx.datetime.minus
 import kotlinx.datetime.plus
@@ -28,14 +29,18 @@ data class YearMonth(val year: Int, val month: Int) {
 }
 
 /**
- * The 6×7 days a month view shows, starting on [weekStart] (Sunday in Korea).
- * Always 42 days so the grid never changes height between months.
+ * The days a month view shows, whole weeks from [weekStart] (Sunday in Korea):
+ * as many weeks as the month needs (4–6), like Samsung Calendar, so a 5-week
+ * month gives each row more room instead of drawing next month's first week.
  */
 fun monthGrid(month: YearMonth, weekStart: DayOfWeek = DayOfWeek.SUNDAY): List<LocalDate> {
     val first = month.firstDay
     val back = (first.dayOfWeek.isoDayNumber - weekStart.isoDayNumber + 7) % 7
     val gridStart = first.minus(back, DateTimeUnit.DAY)
-    return List(42) { gridStart.plus(it, DateTimeUnit.DAY) }
+    val last = month.plusMonths(1).firstDay.minus(1, DateTimeUnit.DAY)
+    val days = gridStart.daysUntil(last) + 1
+    val weeks = (days + 6) / 7
+    return List(weeks * 7) { gridStart.plus(it, DateTimeUnit.DAY) }
 }
 
 /** Days of the week in grid order, for the header row. */

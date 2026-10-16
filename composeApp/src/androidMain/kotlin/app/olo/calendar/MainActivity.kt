@@ -12,10 +12,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import app.olo.calendar.ui.App
 import app.olo.calendar.ui.PermissionGate
+import app.olo.calendar.ui.SystemSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
-class MainActivity : ComponentActivity(), PermissionGate {
+class MainActivity : ComponentActivity(), PermissionGate, SystemSettings {
     private val perms = arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
     private val _granted = MutableStateFlow(false)
     private val _deniedForGood = MutableStateFlow(false)
@@ -34,7 +35,7 @@ class MainActivity : ComponentActivity(), PermissionGate {
         super.onCreate(savedInstanceState)
         refresh()
         val store = AndroidCalendarStore(this)
-        setContent { App(store, this) }
+        setContent { App(store, this, this) }
     }
 
     override fun onResume() {
@@ -49,6 +50,11 @@ class MainActivity : ComponentActivity(), PermissionGate {
     }
 
     override fun request() = launcher.launch(perms)
+
+    override fun openSyncSettings() {
+        runCatching { startActivity(Intent(Settings.ACTION_SYNC_SETTINGS)) }
+            .onFailure { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+    }
 
     override fun openSettings() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))

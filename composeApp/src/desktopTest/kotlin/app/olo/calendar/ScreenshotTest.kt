@@ -12,6 +12,8 @@ import app.olo.calendar.design.OloTheme
 import app.olo.calendar.model.AllDay
 import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.model.EventDraft
+import app.olo.calendar.model.MovePlan
+import app.olo.calendar.model.MoveResult
 import app.olo.calendar.model.Occurrence
 import app.olo.calendar.model.StoredEvent
 import app.olo.calendar.model.SyncKind
@@ -39,24 +41,28 @@ import kotlin.test.assertTrue
 class ScreenshotTest {
     @Test
     fun monthScreen() {
-        for (dark in listOf(false, true)) {
-            val scene = ImageComposeScene(width = 1080, height = 2340, density = Density(2.625f)) {
-                OloTheme(darkTheme = dark) {
-                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                        val scope = rememberCoroutineScope()
-                        val c = remember { CalendarController(SampleStore, scope, zone) }
-                        CalendarScreen(c)
-                    }
+        render("month-light", dark = false, expanded = false)
+        render("month-dark", dark = true, expanded = false)
+        render("month-light-list", dark = false, expanded = true)
+    }
+
+    private fun render(name: String, dark: Boolean, expanded: Boolean) {
+        val scene = ImageComposeScene(width = 1080, height = 2340, density = Density(2.625f)) {
+            OloTheme(darkTheme = dark) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    val scope = rememberCoroutineScope()
+                    val c = remember { CalendarController(SampleStore, scope, zone) }
+                    CalendarScreen(c, startExpanded = expanded)
                 }
             }
-            var img = scene.render(0)
-            for (i in 1..6) img = scene.render(i * 100_000_000L)
-            val out = File("build/screens/month-${if (dark) "dark" else "light"}.png")
-            out.parentFile.mkdirs()
-            out.writeBytes(img.encodeToData(EncodedImageFormat.PNG)!!.bytes)
-            scene.close()
-            assertTrue(out.length() > 0)
         }
+        var img = scene.render(0)
+        for (i in 1..8) img = scene.render(i * 150_000_000L)
+        val out = File("build/screens/$name.png")
+        out.parentFile.mkdirs()
+        out.writeBytes(img.encodeToData(EncodedImageFormat.PNG)!!.bytes)
+        scene.close()
+        assertTrue(out.length() > 0)
     }
 }
 
@@ -64,40 +70,43 @@ private val zone = TimeZone.of("Asia/Seoul")
 
 private object SampleStore : CalendarStore {
     val cals = listOf(
-        CalendarInfo("1", "개인", "me@gmail.com", "com.google", SyncKind.GOOGLE, 0xFFB95B3B.toInt(), true, true, true, false),
-        CalendarInfo("2", "업무", "me@gmail.com", "com.google", SyncKind.GOOGLE, 0xFF4285F4.toInt(), true, true, false, false),
-        CalendarInfo("3", "건강", "me@gmail.com", "com.google", SyncKind.GOOGLE, 0xFF0B8043.toInt(), true, true, false, false),
-        CalendarInfo("4", "대한민국의 휴일", "me@gmail.com", "com.google", SyncKind.GOOGLE, 0xFF0B8043.toInt(), false, true, false, true),
-        CalendarInfo("5", "내 캘린더", "My calendar", "LOCAL", SyncKind.DEVICE, 0xFF8E24AA.toInt(), true, true, false, false),
+        CalendarInfo("1", "kgcaudit02@gmail.com", "kgcaudit02@gmail.com", "com.google", SyncKind.GOOGLE, 0xFF039BE5.toInt(), true, true, true, false),
+        CalendarInfo("2", "Samsung Calendar", "Samsung account", "com.osp.app.signin", SyncKind.SAMSUNG, 0xFF7FB3E8.toInt(), true, true, false, false),
     )
+    private const val PINK = 0xFFE57399.toInt()
 
-    private fun timed(id: String, cal: String, title: String, day: LocalDate, h: Int, m: Int, h2: Int, m2: Int, loc: String = ""): Occurrence {
+    private fun timed(id: String, title: String, day: LocalDate, h: Int, m: Int, h2: Int, m2: Int, loc: String = ""): Occurrence {
         val b = day.at(LocalTime(h, m), zone)
         val e = day.at(LocalTime(h2, m2), zone)
         val (f, l) = timedDays(b, e, zone)
-        return Occurrence(id, cal, title, false, b, e, f, l, loc, cals.first { it.id == cal }.colorArgb, false)
+        return Occurrence(id, "2", title, false, b, e, f, l, loc, cals[1].colorArgb, false)
     }
 
-    private fun allDay(id: String, cal: String, title: String, first: LocalDate, last: LocalDate = first): Occurrence {
+    private fun allDay(id: String, title: String, first: LocalDate, last: LocalDate = first, color: Int = cals[1].colorArgb): Occurrence {
         val b = Instant.fromEpochMilliseconds(AllDay.startMillis(first))
         val e = Instant.fromEpochMilliseconds(AllDay.endMillisExclusive(last))
-        return Occurrence(id, cal, title, true, b, e, first, last, "", cals.first { it.id == cal }.colorArgb, false)
+        return Occurrence(id, "2", title, true, b, e, first, last, "", color, false)
     }
 
     private val d = { day: Int -> LocalDate(2026, 10, day) }
+    private val sep = { day: Int -> LocalDate(2026, 9, day) }
+    // October 2026 as it appears in Samsung Calendar on the user's phone.
     val occ = listOf(
-        allDay("h1", "4", "개천절", d(3)),
-        allDay("h2", "4", "한글날", d(9)),
-        timed("a", "2", "주간 회의", d(5), 9, 30, 10, 30, "본사 7층"),
-        timed("b", "3", "건강검진", d(12), 8, 0, 10, 0, "강남 세브란스"),
-        allDay("c", "2", "현장 출장", d(15), d(17)),
-        timed("d", "2", "감사 보고서 마감", d(16), 14, 0, 15, 0),
-        timed("e", "1", "저녁 약속", d(16), 19, 0, 21, 0, "을지로"),
-        timed("f", "3", "러닝", d(16), 7, 0, 7, 40),
-        timed("g", "1", "가족 모임", d(18), 12, 0, 14, 0),
-        timed("h", "5", "기기 전용 메모", d(21), 10, 0, 11, 0),
-        timed("i", "2", "감사 회의", d(28), 15, 0, 16, 0),
-        allDay("j", "1", "생일", d(31)),
+        allDay("s1", "공동연차", sep(28)), timed("s2", "텐퍼센트 커피 쿠폰 지급", sep(29), 9, 0, 10, 0), timed("s3", "기전팀 보고 실장 리뷰", sep(30), 15, 0, 16, 0),
+        allDay("a", "컬러링 신규 등록일", d(1)), timed("b", "지역화폐 충전 대기", d(1), 9, 0, 9, 30),
+        allDay("c", "서초3동 복합행정타운", d(2)), allDay("c2", "추경 의회", d(2)), allDay("e", "장인 생신", d(3)),
+        allDay("f", "엔화(1천 × 3회 환전)", d(4), d(6)), allDay("g", "용인자연휴양림 신청", d(5), d(9)),
+        timed("h", "아이디헤어", d(5), 11, 0, 12, 0), timed("h2", "점심 약속", d(5), 12, 0, 13, 0), timed("h3", "은행 방문", d(5), 14, 0, 14, 30),
+        allDay("i", "현정탄신일", d(8), color = PINK), timed("j", "삼진일렉스", d(8), 10, 0, 11, 0),
+        allDay("k", "네이버 멤버쉽 갱신일", d(10)),
+        timed("l", "시립대 동문회", d(12), 19, 0, 21, 0), timed("m", "ZARA 의류 찾기", d(13), 18, 0, 18, 30), allDay("n", "창립기념일", d(14)),
+        allDay("o", "Mini 쿠퍼 5 Door", d(16)), timed("p", "영화 스트리트 파이터", d(16), 20, 5, 22, 15, "CGV 용산"),
+        timed("q", "리트와 메트 팝업스토어", d(17), 13, 0, 15, 0), timed("r", "현정 사촌 남동생 결혼", d(18), 12, 0, 14, 0),
+        timed("t", "기전팀 보고", d(19), 15, 0, 16, 0), allDay("u", "AX Boot CAMP", d(20), d(21)), timed("v", "지주 책걸이", d(20), 18, 0, 20, 0),
+        timed("w", "심폐소생술 교육", d(22), 10, 0, 12, 0), timed("x", "현정 저녁 모임", d(22), 19, 0, 21, 0),
+        allDay("y", "세금계산서 발행", d(23)), allDay("z", "연차휴무", d(23)),
+        allDay("aa", "대한항공 엔진정비공장 정기감사", d(26), d(30)), allDay("ab", "지도 감사", d(26), d(30)),
+        allDay("ac", "hj 일본 여행", d(31), LocalDate(2026, 11, 1)),
     )
 
     override suspend fun calendars() = cals
@@ -106,7 +115,11 @@ private object SampleStore : CalendarStore {
     override suspend fun save(draft: EventDraft) = "x"
     override suspend fun delete(id: String) = Unit
     override suspend fun setVisible(calendarId: String, visible: Boolean) = Unit
-    override suspend fun syncStatus() = SyncStatus(pendingUploads = 1)
+    override suspend fun syncStatus() = SyncStatus(accountsWithSyncOff = listOf("kgcaudit02@gmail.com"))
     override fun requestSync() = Unit
     override fun changes(): Flow<Unit> = emptyFlow()
+    override suspend fun eventCounts(): Map<String, Int> = mapOf("2" to 412)
+    override suspend fun planMove(fromCalendarId: String): MovePlan = MovePlan(fromCalendarId, 0, 0, 0, 0)
+    override suspend fun move(fromCalendarId: String, toCalendarId: String, deleteOriginals: Boolean, onProgress: (Int, Int) -> Unit): MoveResult =
+        MoveResult(0, 0, 0)
 }

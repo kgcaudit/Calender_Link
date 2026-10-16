@@ -2,6 +2,8 @@ package app.olo.calendar.ui
 
 import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.model.EventDraft
+import app.olo.calendar.model.MovePlan
+import app.olo.calendar.model.MoveResult
 import app.olo.calendar.model.Occurrence
 import app.olo.calendar.model.StoredEvent
 import app.olo.calendar.model.SyncStatus
@@ -32,10 +34,24 @@ data class CalendarUiState(
     val calendars: List<CalendarInfo> = emptyList(),
     val occurrences: List<Occurrence> = emptyList(),
     val sync: SyncStatus = SyncStatus(),
+    val eventCounts: Map<String, Int> = emptyMap(),
     val loading: Boolean = true,
     val error: String? = null,
 ) {
     val calendarsById: Map<String, CalendarInfo> get() = calendars.associateBy { it.id }
+
+    /** Writable calendars outside Google that hold events: those events never reach the iPhone. */
+    val stranded: List<Pair<CalendarInfo, Int>>
+        get() = calendars.filter { it.writable && !it.isHoliday && !it.kind.reachesGoogle }
+            .mapNotNull { c -> (eventCounts[c.id] ?: 0).takeIf { it > 0 }?.let { c to it } }
+
+    val googleTargets: List<CalendarInfo>
+        get() = calendars.filter { it.kind.reachesGoogle && it.writable && !it.isHoliday }
+            .sortedWith(compareBy({ !it.isPrimary }, { it.name }))
+
+    /** Something stops events from reaching the other phone. */
+    val needsSyncAttention: Boolean
+        get() = !sync.masterSyncOn || sync.accountsWithSyncOff.isNotEmpty() || stranded.isNotEmpty()
 
     /** Where a new event goes: a writable primary Google calendar if there is one. */
     val defaultCalendar: CalendarInfo?
@@ -92,10 +108,13 @@ class CalendarController(
             val from = grid.first().atStartOfDayIn(zone)
             val to = grid.last().plus(1, DateTimeUnit.DAY).atStartOfDayIn(zone)
             runCatching {
-                Triple(store.calendars(), store.occurrences(from, to), store.syncStatus())
-            }.onSuccess { (cals, occ, sync) ->
+                Loaded(store.calendars(), store.occurrences(from, to), store.syncStatus(), store.eventCounts())
+            }.onSuccess { l ->
                 _state.update {
-                    it.copy(calendars = cals, occurrences = occ, sync = sync, loading = false, error = null, today = todayNow)
+                    it.copy(
+                        calendars = l.calendars, occurrences = l.occurrences, sync = l.sync, eventCounts = l.counts,
+                        loading = false, error = null, today = todayNow,
+                    )
                 }
             }.onFailure { e ->
                 _state.update { it.copy(loading = false, error = e.message ?: "캘린더를 읽지 못했습니다.") }
@@ -134,6 +153,18 @@ class CalendarController(
         reload()
     }
 
+    suspend fun planMove(fromCalendarId: String): MovePlan = store.planMove(fromCalendarId)
+
+    /** Moves a calendar's events into a Google calendar and deletes the originals. */
+    fun move(from: String, to: String, onProgress: (Int, Int) -> Unit, done: (Result<MoveResult>) -> Unit) {
+        scope.launch {
+            val r = runCatching { store.move(from, to, deleteOriginals = true, onProgress = onProgress) }
+            done(r)
+            store.requestSync()
+            reload()
+        }
+    }
+
     fun dismissError() = _state.update { it.copy(error = null) }
 
     fun newDraft(day: LocalDate = _state.value.selected): EventDraft? {
@@ -141,3 +172,10 @@ class CalendarController(
         return EventDraft(calendarId = cal.id, startDate = day, endDate = day, timeZoneId = zone.id, reminderMinutes = listOf(10))
     }
 }
+
+private class Loaded(
+    val calendars: List<CalendarInfo>,
+    val occurrences: List<Occurrence>,
+    val sync: SyncStatus,
+    val counts: Map<String, Int>,
+)

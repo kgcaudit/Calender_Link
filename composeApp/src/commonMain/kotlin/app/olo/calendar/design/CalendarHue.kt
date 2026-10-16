@@ -84,3 +84,26 @@ fun OloHue.color(): Color {
 
 @Composable
 fun calendarColor(argb: Int): Color = oloHueFor(argb).color()
+
+/*
+ * Calendar-only tokens, proposed to OLO-Design (not yet in the shared universe):
+ * - Saturday is blue, Sunday and holidays use the family's crimson `error`, as
+ *   Korean calendars do. The blue sits on the cool side of the wheel, away from
+ *   the clay brand, and clears WCAG AA on both grounds (5.4–5.7:1 on the ivory surfaces, 8.4:1+ on
+ *   the dark surface).
+ * - An all-day bar is its tile hue laid softly over the surface, with ordinary
+ *   text on top. A month of solid tiles reads heavy; the hue still tells
+ *   calendars apart, which is the family rule.
+ */
+private val SaturdayLight = Color(0xFF1F63B8)
+private val SaturdayDark = Color(0xFF8AB8F0)
+
+@Composable
+fun saturdayColor(): Color = if (MaterialTheme.colorScheme.background.luminanceIsDark()) SaturdayDark else SaturdayLight
+
+@Composable
+fun softFill(hue: Color): Color {
+    val cs = MaterialTheme.colorScheme
+    val dark = cs.background.luminanceIsDark()
+    return androidx.compose.ui.graphics.lerp(cs.surfaceContainerLowest, hue, if (dark) 0.42f else 0.22f)
+}

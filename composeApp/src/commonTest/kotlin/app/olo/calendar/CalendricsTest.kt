@@ -24,18 +24,19 @@ class CalendricsTest {
     private val la = TimeZone.of("America/Los_Angeles")
 
     @Test
-    fun monthGridStartsOnSundayAndHas42Days() {
-        val g = monthGrid(YearMonth(2026, 10))
-        assertEquals(42, g.size)
-        assertEquals(LocalDate(2026, 9, 27), g.first()) // Oct 1 2026 is a Thursday
+    fun monthGridUsesOnlyTheWeeksTheMonthNeeds() {
+        val g = monthGrid(YearMonth(2026, 10)) // Oct 1 is a Thursday, Oct 31 a Saturday
+        assertEquals(35, g.size)                // 5 weeks, as Samsung Calendar shows it
+        assertEquals(LocalDate(2026, 9, 27), g.first())
         assertEquals(DayOfWeek.SUNDAY, g.first().dayOfWeek)
-        assertEquals(LocalDate(2026, 11, 7), g.last())
+        assertEquals(LocalDate(2026, 10, 31), g.last())
     }
 
     @Test
-    fun monthGridWhenFirstIsSunday() {
-        val g = monthGrid(YearMonth(2026, 2)) // Feb 1 2026 is a Sunday
-        assertEquals(LocalDate(2026, 2, 1), g.first())
+    fun monthGridSixAndFourWeeks() {
+        assertEquals(42, monthGrid(YearMonth(2026, 8)).size) // Aug 1 Sat .. Aug 31 Mon
+        assertEquals(28, monthGrid(YearMonth(2026, 2)).size) // Feb 1 Sun .. Feb 28 Sat
+        assertEquals(LocalDate(2026, 2, 1), monthGrid(YearMonth(2026, 2)).first())
     }
 
     @Test
