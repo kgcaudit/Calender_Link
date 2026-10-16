@@ -80,7 +80,21 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         }.sortedWith(compareBy<CalendarInfo>({ it.kind != SyncKind.GOOGLE }, { it.accountName }, { !it.isPrimary }, { it.name }))
     }
 
-    override suspend fun occurrences(from: Instant, to: Instant): List<Occurrence> = io {
+    override suspend fun occurrences(from: Instant, to: Instant): List<Occurrence> = io { instances(from, to, null, null) }
+
+    override suspend fun search(query: String, from: Instant, to: Instant): List<Occurrence> = io {
+        val q = query.trim()
+        if (q.isEmpty()) return@io emptyList()
+        // LIKE with the user's text escaped, so % and _ are matched literally.
+        val like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        instances(
+            from, to,
+            "(${Instances.TITLE} LIKE ? ESCAPE '\\' OR ${Instances.EVENT_LOCATION} LIKE ? ESCAPE '\\' OR ${Instances.DESCRIPTION} LIKE ? ESCAPE '\\')",
+            arrayOf(like, like, like),
+        )
+    }
+
+    private fun instances(from: Instant, to: Instant, extra: String?, extraArgs: Array<String>?): List<Occurrence> {
         val uri = Instances.CONTENT_URI.buildUpon().also {
             ContentUris.appendId(it, from.toEpochMilliseconds())
             ContentUris.appendId(it, to.toEpochMilliseconds())
@@ -91,7 +105,8 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             Instances.ORIGINAL_ID,
         )
         val z = zone
-        resolver.query(uri, projection, "${Instances.VISIBLE} = 1", null, "${Instances.BEGIN} ASC").list { c ->
+        val selection = "${Instances.VISIBLE} = 1" + (extra?.let { " AND $it" } ?: "")
+        return resolver.query(uri, projection, selection, extraArgs, "${Instances.BEGIN} ASC").list { c ->
             val begin = c.long(Instances.BEGIN)
             val end = c.long(Instances.END)
             val allDay = c.int(Instances.ALL_DAY) == 1

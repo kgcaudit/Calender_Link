@@ -36,6 +36,7 @@ private object PendingIosStore : CalendarStore {
     override suspend fun calendars(): List<CalendarInfo> = emptyList()
     override suspend fun occurrences(from: Instant, to: Instant): List<Occurrence> = emptyList()
     override suspend fun event(id: String): StoredEvent? = null
+    override suspend fun search(query: String, from: Instant, to: Instant): List<Occurrence> = emptyList()
     override suspend fun save(draft: EventDraft): String = error("EventKit store not implemented yet")
     override suspend fun delete(id: String) = Unit
     override suspend fun setVisible(calendarId: String, visible: Boolean) = Unit

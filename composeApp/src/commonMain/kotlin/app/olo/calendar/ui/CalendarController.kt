@@ -189,6 +189,31 @@ class CalendarController(
 
     suspend fun load(id: String): StoredEvent? = store.event(id)
 
+    /** Events from a year back to two years ahead whose text contains [query]. */
+    suspend fun search(query: String): List<Occurrence> {
+        val t = todayNow
+        val from = t.plus(DatePeriod(years = -1)).atStartOfDayIn(zone)
+        val to = t.plus(DatePeriod(years = 2)).atStartOfDayIn(zone)
+        return store.search(query, from, to)
+    }
+
+    /**
+     * Quick-add line: reads date/time words out of [text] (QuickAdd) and saves at
+     * once to the default calendar. [done] gets the saved draft and event id.
+     */
+    fun quickAdd(text: String, done: (Result<Pair<EventDraft, String>>) -> Unit) {
+        val s = _state.value
+        val entry = app.olo.calendar.model.QuickAdd.parse(text, s.selected, todayNow)
+        val base = newDraft(entry.date) ?: return done(Result.failure(IllegalStateException("저장할 캘린더가 없습니다.")))
+        val draft = if (entry.start == null) {
+            base.copy(title = entry.title, allDay = true, reminderMinutes = emptyList())
+        } else {
+            base.copy(title = entry.title, startTime = entry.start, endTime = entry.end ?: entry.start)
+        }
+        save(draft) { r -> done(r.map { draft to it }) }
+        if (YearMonth.of(entry.date) != s.month) select(entry.date)
+    }
+
     fun save(draft: EventDraft, done: (Result<String>) -> Unit = {}) {
         scope.launch {
             val r = runCatching { store.save(draft) }

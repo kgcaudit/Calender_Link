@@ -15,6 +15,8 @@ data class AppSettings(
     /** Calendar for new events; null = the primary Google calendar. */
     val defaultCalendarId: String? = null,
     val lastView: ViewMode = ViewMode.MONTH,
+    /** Month view stage on a phone: 1 full month, 2 lines + day, 3 one week + day. */
+    val monthStage: Int = 1,
 )
 
 /** Small key-value storage (SharedPreferences / NSUserDefaults). */
@@ -38,6 +40,7 @@ fun Preferences.loadSettings(): AppSettings {
         hidePastInAgenda = get("hidePastInAgenda")?.toBooleanStrictOrNull() ?: d.hidePastInAgenda,
         defaultCalendarId = get("defaultCalendarId"),
         lastView = get("lastView")?.let { v -> ViewMode.entries.firstOrNull { it.name == v } } ?: d.lastView,
+        monthStage = get("monthStage")?.toIntOrNull()?.coerceIn(1, 3) ?: d.monthStage,
     )
 }
 
@@ -48,4 +51,5 @@ fun Preferences.saveSettings(s: AppSettings) {
     put("hidePastInAgenda", s.hidePastInAgenda.toString())
     put("defaultCalendarId", s.defaultCalendarId)
     put("lastView", s.lastView.name)
+    put("monthStage", s.monthStage.toString())
 }

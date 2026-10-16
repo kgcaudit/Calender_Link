@@ -21,6 +21,9 @@ interface CalendarStore {
     /** Occurrences overlapping [from, to) in visible calendars, recurrences expanded. */
     suspend fun occurrences(from: Instant, to: Instant): List<Occurrence>
 
+    /** Occurrences in [from, to) whose title, location or notes contain [query]. */
+    suspend fun search(query: String, from: Instant, to: Instant): List<Occurrence>
+
     suspend fun event(id: String): StoredEvent?
 
     /**

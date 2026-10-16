@@ -24,6 +24,7 @@ import app.olo.calendar.model.timedDays
 import app.olo.calendar.store.CalendarStore
 import app.olo.calendar.ui.CalendarController
 import app.olo.calendar.ui.CalendarScreen
+import app.olo.calendar.ui.MonthStage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.datetime.Instant
@@ -42,19 +43,22 @@ import kotlin.test.assertTrue
 class ScreenshotTest {
     @Test
     fun monthScreen() {
-        render("month-light", dark = false, expanded = false)
-        render("month-dark", dark = true, expanded = false)
-        render("month-light-list", dark = false, expanded = true)
+        render("month-light", dark = false)
+        render("month-dark", dark = true)
+        render("month-stage2", dark = false, stage = MonthStage.LINES)
+        render("month-stage3", dark = false, stage = MonthStage.WEEK)
+        render("month-drawer", dark = false, drawer = true)
+        render("search", dark = false, search = "기전팀")
         // Galaxy Z Fold unfolded, as in the user's screenshot (12-hour clock).
-        render("month-wide", dark = false, expanded = false, width = 2000, height = 1500, density = 2.2f)
+        render("month-wide", dark = false, width = 2000, height = 1500, density = 2.2f)
         for (v in listOf(ViewMode.YEAR, ViewMode.WEEK, ViewMode.DAY, ViewMode.AGENDA)) {
-            render("view-${v.name.lowercase()}", dark = false, expanded = false, view = v)
-            render("view-${v.name.lowercase()}-wide", dark = false, expanded = false, width = 2000, height = 1500, density = 2.2f, view = v)
+            render("view-${v.name.lowercase()}", dark = false, view = v)
+            render("view-${v.name.lowercase()}-wide", dark = false, width = 2000, height = 1500, density = 2.2f, view = v)
         }
     }
 
     private fun render(
-        name: String, dark: Boolean, expanded: Boolean, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
+        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
         view: ViewMode = ViewMode.MONTH,
     ) {
         val scene = ImageComposeScene(width = width, height = height, density = Density(density)) {
@@ -63,7 +67,7 @@ class ScreenshotTest {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val scope = rememberCoroutineScope()
                     val c = remember { CalendarController(SampleStore, scope, zone).also { it.setView(view) } }
-                    CalendarScreen(c, startExpanded = expanded)
+                    CalendarScreen(c, startStage = stage, startDrawerOpen = drawer, startSearch = search)
                 }
             }
           }
@@ -124,6 +128,7 @@ private object SampleStore : CalendarStore {
     override suspend fun calendars() = cals
     override suspend fun occurrences(from: Instant, to: Instant) = occ.filter { it.end > from && it.begin < to }
     override suspend fun event(id: String): StoredEvent? = null
+    override suspend fun search(query: String, from: Instant, to: Instant): List<Occurrence> = occ.filter { it.title.contains(query) || it.location.contains(query) }
     override suspend fun save(draft: EventDraft) = "x"
     override suspend fun delete(id: String) = Unit
     override suspend fun setVisible(calendarId: String, visible: Boolean) = Unit
