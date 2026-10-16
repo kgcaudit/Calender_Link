@@ -14,7 +14,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.MaterialTheme
@@ -32,7 +34,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.olo.calendar.design.calendarColor
 import app.olo.calendar.design.status
+import app.olo.calendar.model.AppSettings
 import app.olo.calendar.model.CalendarInfo
+import kotlinx.datetime.DayOfWeek
 import app.olo.calendar.model.MovePlan
 import app.olo.calendar.model.MoveResult
 import app.olo.calendar.model.Occurrence
@@ -357,5 +361,67 @@ fun MoveSheet(
                 }
             }
         }
+    }
+}
+
+/** OLO's own settings; event data and notifications stay with the phone's calendar. */
+@Composable
+fun SettingsSheet(state: CalendarUiState, onChange: ((AppSettings) -> AppSettings) -> Unit, onDismiss: () -> Unit) {
+    val st = state.settings
+    OloSheet(onDismiss) {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("설정", style = MaterialTheme.typography.headlineSmall)
+
+            Text("표시", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("한 주 시작 요일", style = MaterialTheme.typography.bodyLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(DayOfWeek.SUNDAY to "일요일", DayOfWeek.MONDAY to "월요일").forEach { (d, label) ->
+                        FilterChip(st.weekStart == d, { onChange { it.copy(weekStart = d) } }, { Text(label) }, shape = MaterialTheme.shapes.extraSmall)
+                    }
+                }
+            }
+            SettingSwitch("한국 음력 표시", "일요일과 음력 1일·15일에 음력 날짜를 보여 줍니다.", st.showLunar) { v -> onChange { it.copy(showLunar = v) } }
+            SettingSwitch("몇 번째 주인지 표시", "월 보기 왼쪽에 주 번호(ISO)를 보여 줍니다.", st.showWeekNumbers) { v -> onChange { it.copy(showWeekNumbers = v) } }
+            SettingSwitch("일정 목록에서 지난 날짜 숨기기", "일정 보기를 오늘부터 보여 줍니다.", st.hidePastInAgenda) { v -> onChange { it.copy(hidePastInAgenda = v) } }
+
+            Text("새 일정", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("기본 캘린더", style = MaterialTheme.typography.bodyLarge)
+            val writable = state.calendars.filter { it.writable && !it.isHoliday }
+            Row(Modifier.fillMaxWidth().clickable { onChange { it.copy(defaultCalendarId = null) } }, verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = st.defaultCalendarId == null || writable.none { it.id == st.defaultCalendarId }, onClick = { onChange { it.copy(defaultCalendarId = null) } })
+                Text("자동 (Google 기본 캘린더)", style = MaterialTheme.typography.bodyMedium)
+            }
+            writable.forEach { c ->
+                Row(Modifier.fillMaxWidth().clickable { onChange { it.copy(defaultCalendarId = c.id) } }, verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = st.defaultCalendarId == c.id, onClick = { onChange { it.copy(defaultCalendarId = c.id) } })
+                    Tile(calendarColor(c.colorArgb), 12.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(c.name, style = MaterialTheme.typography.bodyMedium)
+                        Text("${c.accountName} · ${c.kind.koLabel()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+
+            Text("안내", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "시간 형식(12/24시간)은 휴대폰 설정을 따릅니다. 알림은 휴대폰과 Google 캘린더의 알림을 그대로 씁니다. " +
+                    "일정은 휴대폰 캘린더에만 저장되고 OLO 서버로 보내지 않습니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingSwitch(title: String, body: String, value: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onChange(!value) }, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = value, onCheckedChange = onChange)
     }
 }

@@ -17,6 +17,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.olo.calendar.design.OloTheme
+import app.olo.calendar.model.MemoryPreferences
+import app.olo.calendar.model.Preferences
 import app.olo.calendar.store.CalendarStore
 import kotlinx.coroutines.flow.StateFlow
 
@@ -36,14 +38,20 @@ interface SystemSettings {
 }
 
 @Composable
-fun App(store: CalendarStore, permissions: PermissionGate, settings: SystemSettings? = null, use24Hour: Boolean = true) {
+fun App(
+    store: CalendarStore,
+    permissions: PermissionGate,
+    settings: SystemSettings? = null,
+    use24Hour: Boolean = true,
+    prefs: Preferences = MemoryPreferences(),
+) {
     OloTheme {
       androidx.compose.runtime.CompositionLocalProvider(LocalUse24Hour provides use24Hour) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             val granted by permissions.granted.collectAsState()
             if (granted) {
                 val scope = rememberCoroutineScope()
-                val controller = remember(store) { CalendarController(store, scope) }
+                val controller = remember(store) { CalendarController(store, scope, prefs = prefs) }
                 CalendarScreen(controller, settings)
             } else {
                 val forGood by permissions.deniedForGood.collectAsState()

@@ -43,6 +43,19 @@ fun monthGrid(month: YearMonth, weekStart: DayOfWeek = DayOfWeek.SUNDAY): List<L
     return List(weeks * 7) { gridStart.plus(it, DateTimeUnit.DAY) }
 }
 
+/** The first day of the week containing [date]. */
+fun weekStartOf(date: LocalDate, weekStart: DayOfWeek = DayOfWeek.SUNDAY): LocalDate {
+    val back = (date.dayOfWeek.isoDayNumber - weekStart.isoDayNumber + 7) % 7
+    return date.minus(back, DateTimeUnit.DAY)
+}
+
+/** ISO-8601 week number (weeks start Monday; week 1 holds the year's first Thursday). */
+fun isoWeekNumber(date: LocalDate): Int {
+    val thursday = date.plus(4 - date.dayOfWeek.isoDayNumber, DateTimeUnit.DAY)
+    val jan1 = LocalDate(thursday.year, 1, 1)
+    return jan1.daysUntil(thursday) / 7 + 1
+}
+
 /** Days of the week in grid order, for the header row. */
 fun weekHeader(weekStart: DayOfWeek = DayOfWeek.SUNDAY): List<DayOfWeek> =
     List(7) { DayOfWeek.entries[(weekStart.ordinal + it) % 7] }

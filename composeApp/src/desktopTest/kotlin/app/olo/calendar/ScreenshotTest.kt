@@ -17,6 +17,7 @@ import app.olo.calendar.model.MoveResult
 import app.olo.calendar.model.Occurrence
 import app.olo.calendar.model.StoredEvent
 import app.olo.calendar.model.SyncKind
+import app.olo.calendar.model.ViewMode
 import app.olo.calendar.model.SyncStatus
 import app.olo.calendar.model.at
 import app.olo.calendar.model.timedDays
@@ -46,15 +47,22 @@ class ScreenshotTest {
         render("month-light-list", dark = false, expanded = true)
         // Galaxy Z Fold unfolded, as in the user's screenshot (12-hour clock).
         render("month-wide", dark = false, expanded = false, width = 2000, height = 1500, density = 2.2f)
+        for (v in listOf(ViewMode.YEAR, ViewMode.WEEK, ViewMode.DAY, ViewMode.AGENDA)) {
+            render("view-${v.name.lowercase()}", dark = false, expanded = false, view = v)
+            render("view-${v.name.lowercase()}-wide", dark = false, expanded = false, width = 2000, height = 1500, density = 2.2f, view = v)
+        }
     }
 
-    private fun render(name: String, dark: Boolean, expanded: Boolean, width: Int = 1080, height: Int = 2340, density: Float = 2.625f) {
+    private fun render(
+        name: String, dark: Boolean, expanded: Boolean, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
+        view: ViewMode = ViewMode.MONTH,
+    ) {
         val scene = ImageComposeScene(width = width, height = height, density = Density(density)) {
           androidx.compose.runtime.CompositionLocalProvider(app.olo.calendar.ui.LocalUse24Hour provides false) {
             OloTheme(darkTheme = dark) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val scope = rememberCoroutineScope()
-                    val c = remember { CalendarController(SampleStore, scope, zone) }
+                    val c = remember { CalendarController(SampleStore, scope, zone).also { it.setView(view) } }
                     CalendarScreen(c, startExpanded = expanded)
                 }
             }

@@ -55,6 +55,14 @@ import app.olo.calendar.design.calendarColor
 import app.olo.calendar.design.saturdayColor
 import app.olo.calendar.design.softFill
 import app.olo.calendar.model.CalendarInfo
+import app.olo.calendar.model.ViewMode
+import app.olo.calendar.model.isoWeekNumber
+import kotlinx.datetime.LocalTime
+import kotlinx.coroutines.launch
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.rememberCoroutineScope
 import app.olo.calendar.model.EventDraft
 import app.olo.calendar.model.KoreanHolidays
 import app.olo.calendar.model.KoreanLunar
@@ -79,18 +87,20 @@ private sealed interface Sheet {
     data object Calendars : Sheet
     data object Sync : Sheet
     data class Move(val fromCalendarId: String) : Sheet
+    data object Settings : Sheet
 }
 
 private val NumberRow = 22.dp
-private val LaneHeight = 16.dp
+internal val LaneHeight = 16.dp
 private val PanelPeek = 78.dp
+private val WeekNumberColumn = 18.dp
 
 /** From this width the day list moves beside the month (unfolded Fold, tablets, landscape). */
-private val WideLayout = 600.dp
+internal val WideLayout = 600.dp
 
 // Break titles between phrases rather than mid-word where the platform supports it.
 private val TitleStyle = TextStyle(lineBreak = LineBreak.Heading)
-private val SegmentText = TextStyle(fontSize = 10.sp, lineHeight = 13.sp)
+internal val SegmentText = TextStyle(fontSize = 10.sp, lineHeight = 13.sp)
 
 /** Holiday names for a day: the built-in Korean list plus any synced holiday calendar, without repeats. */
 internal fun holidayNames(day: LocalDate, occurrences: List<Occurrence>, holidayCalendars: Set<String>): List<String> =
@@ -113,42 +123,65 @@ fun CalendarScreen(controller: CalendarController, settings: SystemSettings? = n
     val dayHolidays = holidayNames(state.selected, state.occurrences, holidayCalendars)
     val newEvent = { controller.newDraft()?.let { sheet = Sheet.Editor(it, null) }; Unit }
 
+    val newEventAt: (LocalDate, LocalTime?) -> Unit = { d, t -> controller.newDraft(d, t)?.let { sheet = Sheet.Editor(it, null) } }
+    val drawer = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
     BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
-        if (maxWidth >= WideLayout) {
-            // Unfolded / tablet / landscape: month on the left, the selected day always open on the right.
-            Row(Modifier.fillMaxSize()) {
-                MonthPane(state, controller, holidayCalendars, onSelect, { sheet = it }, Modifier.weight(0.6f))
-                Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
-                Box(Modifier.weight(0.4f).fillMaxHeight()) {
-                    DaySidePane(
-                        day = state.selected,
-                        isToday = state.selected == state.today,
-                        items = dayItems,
-                        holidays = dayHolidays,
-                        calendars = state.calendarsById,
-                        zone = controller.zone,
-                        onOpen = { sheet = Sheet.Detail(it) },
-                    )
-                    AddButton(newEvent, Modifier.align(Alignment.BottomEnd).padding(20.dp))
+        val wide = maxWidth >= WideLayout
+        val nav = NavActions(
+            current = state.view,
+            onView = { v -> controller.setView(v); scope.launch { drawer.close() } },
+            onCalendars = { sheet = Sheet.Calendars; scope.launch { drawer.close() } },
+            onSync = { sheet = Sheet.Sync; scope.launch { drawer.close() } },
+            onSyncNow = { controller.syncNow(); scope.launch { drawer.close() } },
+            onSettings = { sheet = Sheet.Settings; scope.launch { drawer.close() } },
+        )
+        val content: @Composable () -> Unit = {
+            Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                TopBar(
+                    title = viewTitle(state),
+                    today = state.today,
+                    attention = state.needsSyncAttention,
+                    onMenu = if (wide) null else ({ scope.launch { drawer.open() } }),
+                    onPrev = { controller.step(-1) },
+                    onNext = { controller.step(1) },
+                    onToday = controller::goToday,
+                    onSync = { sheet = Sheet.Sync },
+                )
+                state.error?.let { ErrorLine(it, controller::dismissError) }
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (state.view) {
+                        ViewMode.MONTH -> MonthBody(
+                            state, controller, holidayCalendars, wide, expanded, { expanded = it }, onSelect,
+                            dayItems, dayHolidays, openDetail = { sheet = Sheet.Detail(it) }, newEvent = newEvent,
+                        )
+                        ViewMode.YEAR -> YearView(state, holidayCalendars, onOpen = { d -> controller.open(d, ViewMode.MONTH) }, onSwipe = controller::step)
+                        ViewMode.WEEK -> TimeGridView(
+                            state, controller, holidayCalendars, single = false,
+                            onOpen = { sheet = Sheet.Detail(it) }, onNewAt = newEventAt, onSwipe = controller::step,
+                            onPickDay = { d -> controller.open(d, ViewMode.DAY) },
+                        )
+                        ViewMode.DAY -> TimeGridView(
+                            state, controller, holidayCalendars, single = true,
+                            onOpen = { sheet = Sheet.Detail(it) }, onNewAt = newEventAt, onSwipe = controller::step,
+                            onPickDay = {},
+                        )
+                        ViewMode.AGENDA -> AgendaView(state, controller, holidayCalendars, onOpen = { sheet = Sheet.Detail(it) })
+                    }
+                    if (state.view != ViewMode.MONTH) {
+                        AddButton(newEvent, Modifier.align(Alignment.BottomEnd).padding(20.dp))
+                    }
                 }
             }
-        } else {
-            val panelHeight by animateDpAsState(if (expanded) maxHeight * 0.5f else PanelPeek)
-            Column(Modifier.fillMaxSize()) {
-                MonthPane(state, controller, holidayCalendars, onSelect, { sheet = it }, Modifier.weight(1f))
-                DayPanel(
-                    day = state.selected,
-                    items = dayItems,
-                    holidays = dayHolidays,
-                    calendars = state.calendarsById,
-                    zone = controller.zone,
-                    expanded = expanded,
-                    onToggle = { expanded = it },
-                    onOpen = { sheet = Sheet.Detail(it) },
-                    modifier = Modifier.height(panelHeight),
-                )
+        }
+        if (wide) {
+            Row(Modifier.fillMaxSize()) {
+                NavRail(nav)
+                Box(Modifier.weight(1f)) { content() }
             }
-            AddButton(newEvent, Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = panelHeight + 12.dp))
+        } else {
+            ModalNavigationDrawer(drawerState = drawer, drawerContent = { DrawerContent(nav) }) { content() }
         }
     }
 
@@ -181,6 +214,11 @@ fun CalendarScreen(controller: CalendarController, settings: SystemSettings? = n
             onMove = { sheet = Sheet.Move(it) },
             onDismiss = { sheet = Sheet.None },
         )
+        Sheet.Settings -> SettingsSheet(
+            state = state,
+            onChange = controller::updateSettings,
+            onDismiss = { sheet = Sheet.None },
+        )
         is Sheet.Move -> MoveSheet(
             from = state.calendarsById[s.fromCalendarId],
             targets = state.googleTargets,
@@ -191,40 +229,73 @@ fun CalendarScreen(controller: CalendarController, settings: SystemSettings? = n
     }
 }
 
+/** Month view: the grid with a pull-up day panel (phone) or the day beside it (wide). */
 @Composable
-private fun MonthPane(
+private fun MonthBody(
     state: CalendarUiState,
     controller: CalendarController,
     holidayCalendars: Set<String>,
+    wide: Boolean,
+    expanded: Boolean,
+    onExpand: (Boolean) -> Unit,
     onSelect: (LocalDate) -> Unit,
-    openSheet: (Sheet) -> Unit,
-    modifier: Modifier,
+    dayItems: List<Occurrence>,
+    dayHolidays: List<String>,
+    openDetail: (Occurrence) -> Unit,
+    newEvent: () -> Unit,
 ) {
-    Column(modifier.fillMaxHeight()) {
-        TopBar(
-            title = state.month.koTitle(),
-            today = state.today,
-            attention = state.needsSyncAttention,
-            onPrev = { controller.showMonth(state.month.plusMonths(-1)) },
-            onNext = { controller.showMonth(state.month.plusMonths(1)) },
-            onToday = controller::goToday,
-            onSync = { openSheet(Sheet.Sync) },
-            onCalendars = { openSheet(Sheet.Calendars) },
-        )
-        state.error?.let { ErrorLine(it, controller::dismissError) }
-        MonthGrid(
-            state = state,
-            holidayCalendars = holidayCalendars,
-            onSelect = onSelect,
-            onSwipe = { dir -> controller.showMonth(state.month.plusMonths(dir)) },
-            modifier = Modifier.weight(1f),
-        )
+    val showLunar = state.settings.showLunar
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        if (wide) {
+            Row(Modifier.fillMaxSize()) {
+                MonthGrid(state, holidayCalendars, onSelect, controller::step, Modifier.weight(0.6f).fillMaxHeight())
+                Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                Box(Modifier.weight(0.4f).fillMaxHeight()) {
+                    DaySidePane(
+                        day = state.selected,
+                        isToday = state.selected == state.today,
+                        items = dayItems,
+                        holidays = dayHolidays,
+                        calendars = state.calendarsById,
+                        zone = controller.zone,
+                        onOpen = openDetail,
+                        showLunar = showLunar,
+                    )
+                    AddButton(newEvent, Modifier.align(Alignment.BottomEnd).padding(20.dp))
+                }
+            }
+        } else {
+            val panelHeight by animateDpAsState(if (expanded) maxHeight * 0.55f else PanelPeek)
+            Column(Modifier.fillMaxSize()) {
+                MonthGrid(state, holidayCalendars, onSelect, controller::step, Modifier.weight(1f))
+                DayPanel(
+                    day = state.selected,
+                    items = dayItems,
+                    holidays = dayHolidays,
+                    calendars = state.calendarsById,
+                    zone = controller.zone,
+                    expanded = expanded,
+                    onToggle = onExpand,
+                    onOpen = openDetail,
+                    modifier = Modifier.height(panelHeight),
+                    showLunar = showLunar,
+                )
+            }
+            AddButton(newEvent, Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = panelHeight + 12.dp))
+        }
     }
+}
+
+/** "10월" in the current year (as Samsung titles it), "2027년 1월" otherwise; "2026년" in the year view. */
+internal fun viewTitle(s: CalendarUiState): String = when {
+    s.view == ViewMode.YEAR -> "${s.selected.year}년"
+    s.month.year == s.today.year -> "${s.month.month}월"
+    else -> s.month.koTitle()
 }
 
 /** The screen's primary action wears the brand: primary / onPrimary (OLO CONSUMING.md). */
 @Composable
-private fun AddButton(onClick: () -> Unit, modifier: Modifier) {
+internal fun AddButton(onClick: () -> Unit, modifier: Modifier) {
     FloatingActionButton(
         onClick = onClick,
         containerColor = MaterialTheme.colorScheme.primary,
@@ -238,23 +309,28 @@ private fun TopBar(
     title: String,
     today: LocalDate,
     attention: Boolean,
+    onMenu: (() -> Unit)?,
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onToday: () -> Unit,
     onSync: () -> Unit,
-    onCalendars: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 2.dp),
+        Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        OloTextButton("‹", onPrev)
-        Text(title, style = MaterialTheme.typography.headlineSmall, maxLines = 1, softWrap = false, modifier = Modifier.padding(horizontal = 2.dp))
-        OloTextButton("›", onNext)
+        onMenu?.let { BarGlyph("☰", "메뉴", it) }
+        BarGlyph("‹", "이전", onPrev)
+        // The title gives way first on a narrow phone; the sync chip and today button keep their room.
+        Text(
+            title, style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        BarGlyph("›", "다음", onNext)
         Spacer(Modifier.weight(1f))
         if (attention) {
             Text(
-                "동기화 확인 필요",
+                "동기화 확인",
                 maxLines = 1,
                 softWrap = false,
                 style = MaterialTheme.typography.labelMedium,
@@ -276,12 +352,21 @@ private fun TopBar(
         ) {
             Text("${today.dayOfMonth}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
         }
-        OloTextButton("캘린더", onCalendars)
     }
 }
 
 @Composable
-private fun ErrorLine(text: String, onClick: () -> Unit) {
+private fun BarGlyph(glyph: String, label: String, onClick: () -> Unit) {
+    Box(
+        Modifier.size(width = 36.dp, height = 40.dp).clickable(onClick = onClick).semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(glyph, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+@Composable
+internal fun ErrorLine(text: String, onClick: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -300,7 +385,8 @@ private fun MonthGrid(
     onSwipe: (Int) -> Unit,
     modifier: Modifier,
 ) {
-    val days = monthGrid(state.month)
+    val weekStart = state.settings.weekStart
+    val days = monthGrid(state.month, weekStart)
     var drag by remember(state.month) { mutableStateOf(0f) }
     val visibleEvents = state.occurrences.filter { it.calendarId !in holidayCalendars }
     Column(
@@ -316,7 +402,8 @@ private fun MonthGrid(
         },
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            weekHeader().forEach { d ->
+            if (state.settings.showWeekNumbers) Spacer(Modifier.width(WeekNumberColumn))
+            weekHeader(weekStart).forEach { d ->
                 Text(
                     d.koShort(),
                     style = MaterialTheme.typography.labelSmall,
@@ -331,14 +418,27 @@ private fun MonthGrid(
             }
         }
         days.chunked(7).forEach { week ->
-            WeekRow(
-                week = week,
-                state = state,
-                events = visibleEvents,
-                holidayCalendars = holidayCalendars,
-                onSelect = onSelect,
-                modifier = Modifier.weight(1f).padding(bottom = 3.dp),
-            )
+            Row(Modifier.weight(1f).padding(bottom = 3.dp)) {
+                if (state.settings.showWeekNumbers) {
+                    // ISO week number, counted from the week's Monday.
+                    val monday = week.first { it.dayOfWeek == DayOfWeek.MONDAY }
+                    Text(
+                        "${isoWeekNumber(monday)}",
+                        fontSize = 9.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.width(WeekNumberColumn).padding(top = 5.dp),
+                    )
+                }
+                WeekRow(
+                    week = week,
+                    state = state,
+                    events = visibleEvents,
+                    holidayCalendars = holidayCalendars,
+                    onSelect = onSelect,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                )
+            }
         }
     }
 }
@@ -377,6 +477,7 @@ private fun WeekRow(
                     isSelected = day == state.selected,
                     isHoliday = holidayNames(day, state.occurrences, holidayCalendars).isNotEmpty(),
                     hidden = layout.hiddenPerDay[i],
+                    lunarOn = state.settings.showLunar,
                     onClick = { onSelect(day) },
                     modifier = Modifier.weight(1f),
                 )
@@ -397,6 +498,7 @@ private fun DayCell(
     isSelected: Boolean,
     isHoliday: Boolean,
     hidden: Int,
+    lunarOn: Boolean,
     onClick: () -> Unit,
     modifier: Modifier,
 ) {
@@ -409,7 +511,7 @@ private fun DayCell(
     }
     val lunar = KoreanLunar.fromSolar(day)
     // Lunar date on Sundays (as Samsung shows it) and on the 1st and 15th of each lunar month.
-    val showLunar = lunar != null && (day.dayOfWeek == DayOfWeek.SUNDAY || lunar.day == 1 || lunar.day == 15)
+    val showLunar = lunarOn && lunar != null && (day.dayOfWeek == DayOfWeek.SUNDAY || lunar.day == 1 || lunar.day == 15)
     Column(
         modifier
             .fillMaxHeight()
@@ -441,14 +543,14 @@ private fun DayCell(
 
 /** One event piece in a week row: a soft bar for all-day and multi-day, a tile and text for timed. */
 @Composable
-private fun Segment(seg: WeekSegment, colW: Dp, gap: Dp, faded: Boolean) {
+internal fun Segment(seg: WeekSegment, colW: Dp, gap: Dp, faded: Boolean, top: Dp = NumberRow) {
     val o = seg.occurrence
     val hue = calendarColor(o.colorArgb)
     val alpha = if (faded) 0.38f else 1f
     val inset = 2.dp
     val left = colW * seg.startCol + (if (seg.continuesBefore) 0.dp else inset)
     val right = colW * (seg.endCol + 1) - gap - (if (seg.continuesAfter) 0.dp else inset)
-    val y = NumberRow + LaneHeight * seg.lane
+    val y = top + LaneHeight * seg.lane
     val h = LaneHeight * seg.height - 2.dp
     val title = o.title.ifBlank { "(제목 없음)" }
     val textColor = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha)
@@ -491,6 +593,7 @@ private fun DayPanel(
     onToggle: (Boolean) -> Unit,
     onOpen: (Occurrence) -> Unit,
     modifier: Modifier,
+    showLunar: Boolean = true,
 ) {
     var drag by remember { mutableStateOf(0f) }
     Surface(
@@ -540,7 +643,7 @@ private fun DayPanel(
                         )
                     }
                     Spacer(Modifier.weight(1f))
-                    KoreanLunar.fromSolar(day)?.let {
+                    KoreanLunar.fromSolar(day)?.takeIf { showLunar }?.let {
                         Text(it.longLabel(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -568,7 +671,7 @@ private fun DayPanel(
 }
 
 @Composable
-private fun DayItems(
+internal fun DayItems(
     items: List<Occurrence>,
     calendars: Map<String, CalendarInfo>,
     zone: TimeZone,
@@ -616,6 +719,7 @@ private fun DaySidePane(
     calendars: Map<String, CalendarInfo>,
     zone: TimeZone,
     onOpen: (Occurrence) -> Unit,
+    showLunar: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxSize().padding(top = 8.dp)) {
@@ -640,7 +744,7 @@ private fun DaySidePane(
                 },
             )
         }
-        val meta = listOfNotNull(KoreanLunar.fromSolar(day)?.longLabel(), holidays.takeIf { it.isNotEmpty() }?.joinToString(" · "))
+        val meta = listOfNotNull(KoreanLunar.fromSolar(day)?.takeIf { showLunar }?.longLabel(), holidays.takeIf { it.isNotEmpty() }?.joinToString(" · "))
         Row(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp)) {
             meta.forEachIndexed { i, m ->
                 if (i > 0) Text("  |  ", style = MaterialTheme.typography.bodyMedium, color = cs.outlineVariant)

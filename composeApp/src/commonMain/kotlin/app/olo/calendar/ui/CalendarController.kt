@@ -1,6 +1,14 @@
 package app.olo.calendar.ui
 
+import app.olo.calendar.model.AppSettings
 import app.olo.calendar.model.CalendarInfo
+import app.olo.calendar.model.MemoryPreferences
+import app.olo.calendar.model.Preferences
+import app.olo.calendar.model.ViewMode
+import app.olo.calendar.model.loadSettings
+import app.olo.calendar.model.saveSettings
+import app.olo.calendar.model.weekStartOf
+import kotlinx.datetime.DatePeriod
 import app.olo.calendar.model.EventDraft
 import app.olo.calendar.model.MovePlan
 import app.olo.calendar.model.MoveResult
@@ -37,6 +45,8 @@ data class CalendarUiState(
     val eventCounts: Map<String, Int> = emptyMap(),
     val loading: Boolean = true,
     val error: String? = null,
+    val view: ViewMode = ViewMode.MONTH,
+    val settings: AppSettings = AppSettings(),
 ) {
     val calendarsById: Map<String, CalendarInfo> get() = calendars.associateBy { it.id }
 
@@ -53,10 +63,11 @@ data class CalendarUiState(
     val needsSyncAttention: Boolean
         get() = !sync.masterSyncOn || sync.accountsWithSyncOff.isNotEmpty() || stranded.isNotEmpty()
 
-    /** Where a new event goes: a writable primary Google calendar if there is one. */
+    /** Where a new event goes: the chosen default, else a writable primary Google calendar. */
     val defaultCalendar: CalendarInfo?
         get() = calendars.filter { it.writable && !it.isHoliday }.let { w ->
-            w.firstOrNull { it.kind.reachesGoogle && it.isPrimary }
+            w.firstOrNull { it.id == settings.defaultCalendarId }
+                ?: w.firstOrNull { it.kind.reachesGoogle && it.isPrimary }
                 ?: w.firstOrNull { it.kind.reachesGoogle }
                 ?: w.firstOrNull()
         }
@@ -68,11 +79,15 @@ class CalendarController(
     private val store: CalendarStore,
     private val scope: CoroutineScope,
     val zone: TimeZone = TimeZone.currentSystemDefault(),
+    private val prefs: Preferences = MemoryPreferences(),
 ) {
     private val todayNow: LocalDate get() = Clock.System.now().toLocalDateTime(zone).date
 
     private val _state = MutableStateFlow(
-        todayNow.let { CalendarUiState(month = YearMonth.of(it), selected = it, today = it) },
+        todayNow.let {
+            val settings = prefs.loadSettings()
+            CalendarUiState(month = YearMonth.of(it), selected = it, today = it, view = settings.lastView, settings = settings)
+        },
     )
     val state: StateFlow<CalendarUiState> = _state.asStateFlow()
 
@@ -93,20 +108,23 @@ class CalendarController(
     }
 
     fun select(day: LocalDate) {
-        val m = YearMonth.of(day)
-        val changedMonth = m != _state.value.month
-        _state.update { it.copy(selected = day, month = m) }
-        if (changedMonth) reload()
+        val before = _state.value
+        _state.update { it.copy(selected = day, month = YearMonth.of(day)) }
+        if (range(before).let { (a, b) -> day < a || day >= b } || before.view == ViewMode.WEEK || before.view == ViewMode.DAY) reload()
     }
 
-    fun goToday() = select(todayNow)
+    fun goToday() {
+        val t = todayNow
+        _state.update { it.copy(selected = t, month = YearMonth.of(t), today = t) }
+        reload()
+    }
 
     fun reload() {
         scope.launch {
             val s = _state.value
-            val grid = monthGrid(s.month)
-            val from = grid.first().atStartOfDayIn(zone)
-            val to = grid.last().plus(1, DateTimeUnit.DAY).atStartOfDayIn(zone)
+            val (fromDay, toDay) = range(s)
+            val from = fromDay.atStartOfDayIn(zone)
+            val to = toDay.atStartOfDayIn(zone)
             runCatching {
                 Loaded(store.calendars(), store.occurrences(from, to), store.syncStatus(), store.eventCounts())
             }.onSuccess { l ->
@@ -120,6 +138,53 @@ class CalendarController(
                 _state.update { it.copy(loading = false, error = e.message ?: "캘린더를 읽지 못했습니다.") }
             }
         }
+    }
+
+    /** Days [from, to) the current view needs. */
+    private fun range(s: CalendarUiState): Pair<LocalDate, LocalDate> = when (s.view) {
+        ViewMode.YEAR -> LocalDate(s.selected.year, 1, 1) to LocalDate(s.selected.year + 1, 1, 1)
+        ViewMode.MONTH -> monthGrid(s.month, s.settings.weekStart).let { it.first() to it.last().plus(1, DateTimeUnit.DAY) }
+        ViewMode.WEEK -> weekStartOf(s.selected, s.settings.weekStart).let { it to it.plus(7, DateTimeUnit.DAY) }
+        ViewMode.DAY -> s.selected to s.selected.plus(1, DateTimeUnit.DAY)
+        ViewMode.AGENDA -> {
+            val start = if (s.settings.hidePastInAgenda) s.today else s.month.firstDay
+            start to s.month.firstDay.plus(DatePeriod(months = 3))
+        }
+    }
+
+    fun setView(view: ViewMode) {
+        updateSettings { it.copy(lastView = view) }
+        _state.update { it.copy(view = view) }
+        reload()
+    }
+
+    /** Previous / next page of the current view: a year, a month, a week or a day. */
+    fun step(dir: Int) {
+        val s = _state.value
+        val day = when (s.view) {
+            ViewMode.YEAR -> s.selected.plus(DatePeriod(years = dir))
+            ViewMode.MONTH, ViewMode.AGENDA -> s.month.plusMonths(dir).firstDay.let { if (YearMonth.of(s.today) == YearMonth.of(it)) s.today else it }
+            ViewMode.WEEK -> s.selected.plus(7 * dir, DateTimeUnit.DAY)
+            ViewMode.DAY -> s.selected.plus(dir, DateTimeUnit.DAY)
+        }
+        _state.update { it.copy(selected = day, month = YearMonth.of(day)) }
+        reload()
+    }
+
+    /** Opens a day in another view (a year-view tap goes to that month). */
+    fun open(day: LocalDate, view: ViewMode) {
+        _state.update { it.copy(selected = day, month = YearMonth.of(day), view = view) }
+        updateSettings { it.copy(lastView = view) }
+        reload()
+    }
+
+    fun updateSettings(change: (AppSettings) -> AppSettings) {
+        val before = _state.value.settings
+        val next = change(before)
+        if (next == before) return
+        prefs.saveSettings(next)
+        _state.update { it.copy(settings = next) }
+        if (next.weekStart != before.weekStart || next.hidePastInAgenda != before.hidePastInAgenda) reload()
     }
 
     suspend fun load(id: String): StoredEvent? = store.event(id)
@@ -167,9 +232,14 @@ class CalendarController(
 
     fun dismissError() = _state.update { it.copy(error = null) }
 
-    fun newDraft(day: LocalDate = _state.value.selected): EventDraft? {
+    /** A new event on [day]; at [start] for an hour when given (a tap in the time grid). */
+    fun newDraft(day: LocalDate = _state.value.selected, start: kotlinx.datetime.LocalTime? = null): EventDraft? {
         val cal = _state.value.defaultCalendar ?: return null
-        return EventDraft(calendarId = cal.id, startDate = day, endDate = day, timeZoneId = zone.id, reminderMinutes = listOf(10))
+        val base = EventDraft(calendarId = cal.id, startDate = day, endDate = day, timeZoneId = zone.id, reminderMinutes = listOf(10))
+        if (start == null) return base
+        val endHour = start.hour + 1
+        return if (endHour >= 24) base.copy(startTime = start, endTime = kotlinx.datetime.LocalTime(23, 59))
+        else base.copy(startTime = start, endTime = kotlinx.datetime.LocalTime(endHour, start.minute))
     }
 }
 
