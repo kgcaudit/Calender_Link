@@ -1,0 +1,75 @@
+package app.olo.calendar.ui
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import app.olo.calendar.design.OloTheme
+import app.olo.calendar.store.CalendarStore
+import kotlinx.coroutines.flow.StateFlow
+
+/** The platform's calendar-permission flow (Android runtime permission / iOS full access). */
+interface PermissionGate {
+    val granted: StateFlow<Boolean>
+    /** True once the user has refused in a way only system settings can undo. */
+    val deniedForGood: StateFlow<Boolean>
+    fun request()
+    fun openSettings()
+}
+
+@Composable
+fun App(store: CalendarStore, permissions: PermissionGate) {
+    OloTheme {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            val granted by permissions.granted.collectAsState()
+            if (granted) {
+                val scope = rememberCoroutineScope()
+                val controller = remember(store) { CalendarController(store, scope) }
+                CalendarScreen(controller)
+            } else {
+                val forGood by permissions.deniedForGood.collectAsState()
+                PermissionScreen(forGood, permissions::request, permissions::openSettings)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionScreen(deniedForGood: Boolean, onRequest: () -> Unit, onSettings: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("캘린더 접근 권한이 필요합니다", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            "OLO Calendar는 휴대폰의 캘린더(삼성 캘린더·아이폰 캘린더와 같은 저장소)를 읽고 씁니다. " +
+                "일정은 OLO 서버로 보내지 않고, Google과의 동기화는 휴대폰이 그대로 처리합니다.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.widthIn(max = 420.dp),
+        )
+        if (deniedForGood) {
+            Text(
+                "권한이 꺼져 있습니다. 설정 > 애플리케이션 > OLO Calendar > 권한에서 캘린더를 허용해 주세요.",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.widthIn(max = 420.dp),
+            )
+            OloButton("설정 열기", onSettings)
+        } else {
+            OloButton("권한 허용", onRequest)
+        }
+    }
+}
