@@ -6,6 +6,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Density
 import app.olo.calendar.design.OloTheme
@@ -48,6 +51,10 @@ class ScreenshotTest {
         render("month-stage2", dark = false, stage = MonthStage.LINES)
         render("month-stage3", dark = false, stage = MonthStage.WEEK)
         render("month-drawer", dark = false, drawer = true)
+        // The whole drawer at once, down to the sync cards.
+        render("month-drawer-tall", dark = false, drawer = true, height = 5200)
+        // Halfway through a swipe to November: the page follows the finger.
+        render("month-swipe", dark = false, swipe = 0.45f)
         render("search", dark = false, search = "기전팀")
         // Galaxy Z Fold unfolded, as in the user's screenshot (12-hour clock).
         render("month-wide", dark = false, width = 2000, height = 1500, density = 2.2f)
@@ -58,7 +65,7 @@ class ScreenshotTest {
     }
 
     private fun render(
-        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
+        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
         view: ViewMode = ViewMode.MONTH,
     ) {
         val scene = ImageComposeScene(width = width, height = height, density = Density(density)) {
@@ -74,6 +81,19 @@ class ScreenshotTest {
         }
         var img = scene.render(0)
         for (i in 1..8) img = scene.render(i * 150_000_000L)
+        if (swipe != null) {
+            // Drag from the right edge of the grid towards the left and hold.
+            val y = height * 0.35f
+            val x0 = width * 0.9f
+            var t = 9 * 150_000_000L
+            scene.sendPointerEvent(PointerEventType.Press, Offset(x0, y), type = PointerType.Touch)
+            for (k in 1..12) {
+                t += 16_000_000L
+                scene.sendPointerEvent(PointerEventType.Move, Offset(x0 - width * swipe * k / 12f, y), type = PointerType.Touch)
+                img = scene.render(t)
+            }
+            img = scene.render(t + 16_000_000L)
+        }
         val out = File("build/screens/$name.png")
         out.parentFile.mkdirs()
         out.writeBytes(img.encodeToData(EncodedImageFormat.PNG)!!.bytes)
@@ -85,23 +105,29 @@ class ScreenshotTest {
 private val zone = TimeZone.of("Asia/Seoul")
 
 private object SampleStore : CalendarStore {
-    val cals = listOf(
-        CalendarInfo("1", "kgcaudit02@gmail.com", "kgcaudit02@gmail.com", "com.google", SyncKind.GOOGLE, 0xFF039BE5.toInt(), true, true, true, false),
-        CalendarInfo("2", "Samsung Calendar", "Samsung account", "com.osp.app.signin", SyncKind.SAMSUNG, 0xFF7FB3E8.toInt(), true, true, false, false),
-    )
+    // The user's phone: events live in Samsung Calendar (id 16), which has VISIBLE = 0 there.
+    val cals = phoneCalendars().map { c ->
+        when (c.id) {
+            "16" -> c.copy(colorArgb = 0xFF7FB3E8.toInt())
+            "7" -> c.copy(colorArgb = 0xFF33B679.toInt())
+            "15" -> c.copy(colorArgb = 0xFF8E24AA.toInt())
+            "10" -> c.copy(colorArgb = 0xFFF6BF26.toInt())
+            else -> c
+        }
+    }
     private const val PINK = 0xFFE57399.toInt()
 
     private fun timed(id: String, title: String, day: LocalDate, h: Int, m: Int, h2: Int, m2: Int, loc: String = ""): Occurrence {
         val b = day.at(LocalTime(h, m), zone)
         val e = day.at(LocalTime(h2, m2), zone)
         val (f, l) = timedDays(b, e, zone)
-        return Occurrence(id, "2", title, false, b, e, f, l, loc, cals[1].colorArgb, false)
+        return Occurrence(id, "16", title, false, b, e, f, l, loc, 0xFF7FB3E8.toInt(), false)
     }
 
-    private fun allDay(id: String, title: String, first: LocalDate, last: LocalDate = first, color: Int = cals[1].colorArgb): Occurrence {
+    private fun allDay(id: String, title: String, first: LocalDate, last: LocalDate = first, color: Int = 0xFF7FB3E8.toInt()): Occurrence {
         val b = Instant.fromEpochMilliseconds(AllDay.startMillis(first))
         val e = Instant.fromEpochMilliseconds(AllDay.endMillisExclusive(last))
-        return Occurrence(id, "2", title, true, b, e, first, last, "", color, false)
+        return Occurrence(id, "16", title, true, b, e, first, last, "", color, false)
     }
 
     private val d = { day: Int -> LocalDate(2026, 10, day) }
@@ -132,10 +158,10 @@ private object SampleStore : CalendarStore {
     override suspend fun save(draft: EventDraft) = "x"
     override suspend fun delete(id: String) = Unit
     override suspend fun setVisible(calendarId: String, visible: Boolean) = Unit
-    override suspend fun syncStatus() = SyncStatus(accountsWithSyncOff = listOf("kgcaudit02@gmail.com"))
+    override suspend fun syncStatus() = SyncStatus(accountsWithSyncOff = listOf("kgcaudit02@gmail.com", "sutest@gmail.com"))
     override fun requestSync() = Unit
     override fun changes(): Flow<Unit> = emptyFlow()
-    override suspend fun eventCounts(): Map<String, Int> = mapOf("2" to 412)
+    override suspend fun eventCounts(): Map<String, Int> = mapOf("16" to 412, "6" to 12, "1" to 3, "15" to 40)
     override suspend fun planMove(fromCalendarId: String): MovePlan = MovePlan(fromCalendarId, 0, 0, 0, 0)
     override suspend fun move(fromCalendarId: String, toCalendarId: String, deleteOriginals: Boolean, onProgress: (Int, Int) -> Unit): MoveResult =
         MoveResult(0, 0, 0)

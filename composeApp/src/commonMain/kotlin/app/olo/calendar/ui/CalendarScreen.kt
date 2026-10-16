@@ -1,5 +1,16 @@
 package app.olo.calendar.ui
 
+import app.olo.calendar.design.OloMotion
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -131,22 +142,31 @@ fun CalendarScreen(
             }
         }
 
+        val closeDrawer = { scope.launch { drawer.close() }; Unit }
         val nav = NavActions(
-            current = state.view,
-            attention = state.needsSyncAttention,
-            calendars = state.calendars,
-            onView = { v -> controller.setView(v); scope.launch { drawer.close() } },
-            onToggleCalendar = controller::setVisible,
-            onCalendars = { sheet = Sheet.Calendars; scope.launch { drawer.close() } },
-            onSync = { sheet = Sheet.Sync; scope.launch { drawer.close() } },
-            onSyncNow = { controller.syncNow(); scope.launch { drawer.close() } },
-            onSettings = { sheet = Sheet.Settings; scope.launch { drawer.close() } },
+            state = state,
+            onView = { v -> controller.setView(v); closeDrawer() },
+            onShown = controller::setShown,
+            onShowOnly = controller::showOnly,
+            onShowDefault = controller::showDefault,
+            onFold = controller::setFolded,
+            onAction = { a ->
+                when (a) {
+                    is SyncAction.Stranded -> sheet = Sheet.Move(a.calendar.id)
+                    else -> settings?.openSyncSettings() ?: run { sheet = Sheet.Sync }
+                }
+                closeDrawer()
+            },
+            onCalendars = { sheet = Sheet.Calendars; closeDrawer() },
+            onSyncNow = { controller.syncNow(); closeDrawer() },
+            onSettings = { sheet = Sheet.Settings; closeDrawer() },
         )
         val content: @Composable () -> Unit = {
             Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                 Column(Modifier.fillMaxSize()) {
                     TopBar(
                         title = viewTitle(state),
+                        titleOrder = if (state.view == ViewMode.YEAR) state.selected.year * 12 else state.month.index,
                         today = state.today,
                         badge = state.needsSyncAttention && !wide,
                         onMenu = if (wide) null else ({ scope.launch { drawer.open() } }),
@@ -157,23 +177,36 @@ fun CalendarScreen(
                     )
                     state.error?.let { ErrorLine(it, controller::dismissError) }
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        when (state.view) {
+                        // One view replacing another: shared axis Z, a slight zoom with a fade (docs/05 §6 #2).
+                        AnimatedContent(
+                            targetState = state.view,
+                            transitionSpec = {
+                                val deeper = targetState.ordinal > initialState.ordinal
+                                (fadeIn(tween(OloMotion.Long, delayMillis = 60, easing = OloMotion.EmphasizedDecelerate)) +
+                                    scaleIn(tween(OloMotion.Long, easing = OloMotion.EmphasizedDecelerate), initialScale = if (deeper) 0.92f else 1.08f)) togetherWith
+                                    (fadeOut(tween(OloMotion.Quick)) + scaleOut(tween(OloMotion.Long, easing = OloMotion.EmphasizedAccelerate), targetScale = if (deeper) 1.06f else 0.94f))
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                            label = "view",
+                        ) { view ->
+                        when (view) {
                             ViewMode.MONTH -> MonthBody(
                                 state, controller, holidayCalendars, wide, stage, controller::select,
                                 dayItems, dayHolidays, openDetail = { sheet = Sheet.Detail(it) },
                             )
-                            ViewMode.YEAR -> YearView(state, holidayCalendars, onOpen = { d -> controller.open(d, ViewMode.MONTH) }, onSwipe = controller::step)
+                            ViewMode.YEAR -> YearView(state, holidayCalendars, onOpen = { d -> controller.open(d, ViewMode.MONTH) }, onYear = controller::showYear)
                             ViewMode.WEEK -> TimeGridView(
                                 state, controller, holidayCalendars, single = false,
-                                onOpen = { sheet = Sheet.Detail(it) }, onNewAt = openEditor, onSwipe = controller::step,
+                                onOpen = { sheet = Sheet.Detail(it) }, onNewAt = openEditor,
                                 onPickDay = { d -> controller.open(d, ViewMode.DAY) },
                             )
                             ViewMode.DAY -> TimeGridView(
                                 state, controller, holidayCalendars, single = true,
-                                onOpen = { sheet = Sheet.Detail(it) }, onNewAt = openEditor, onSwipe = controller::step,
+                                onOpen = { sheet = Sheet.Detail(it) }, onNewAt = openEditor,
                                 onPickDay = {},
                             )
                             ViewMode.AGENDA -> AgendaView(state, controller, holidayCalendars, onOpen = { sheet = Sheet.Detail(it) })
+                        }
                         }
                         // The quick-add line floats at the bottom; in the wide month it sits in the day pane.
                         val inPane = wide && state.view == ViewMode.MONTH
@@ -190,7 +223,11 @@ fun CalendarScreen(
                         }
                     }
                 }
-                if (searchOpen) {
+                AnimatedVisibility(
+                    visible = searchOpen,
+                    enter = fadeIn(tween(OloMotion.Medium)) + slideInVertically(tween(OloMotion.Medium, easing = OloMotion.EmphasizedDecelerate)) { -it / 16 },
+                    exit = fadeOut(tween(OloMotion.Quick)) + slideOutVertically(tween(OloMotion.Quick)) { -it / 16 },
+                ) {
                     SearchScreen(
                         controller = controller,
                         initial = startSearch.orEmpty(),
@@ -244,8 +281,7 @@ fun CalendarScreen(
             onDismiss = { sheet = Sheet.None },
         )
         Sheet.Calendars -> CalendarsSheet(
-            state = state,
-            onToggle = controller::setVisible,
+            nav = calendarNav(state, controller, onAction = { a -> sheet = if (a is SyncAction.Stranded) Sheet.Move(a.calendar.id) else Sheet.Sync }),
             onOpenSync = { sheet = Sheet.Sync },
             onDismiss = { sheet = Sheet.None },
         )
@@ -275,6 +311,7 @@ fun CalendarScreen(
 @Composable
 private fun TopBar(
     title: String,
+    titleOrder: Int,
     today: LocalDate,
     badge: Boolean,
     onMenu: (() -> Unit)?,
@@ -300,7 +337,19 @@ private fun TopBar(
                 .semantics { contentDescription = "$title, 년·월 고르기" },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            // The title rolls with the page: up for later, down for earlier (docs/05 §6 #8).
+            AnimatedContent(
+                targetState = title to titleOrder,
+                contentKey = { it.first },
+                transitionSpec = {
+                    val dir = if (targetState.second >= initialState.second) 1 else -1
+                    (slideInVertically(tween(OloMotion.Medium, easing = OloMotion.EmphasizedDecelerate)) { h -> dir * h / 2 } + fadeIn(tween(OloMotion.Medium))) togetherWith
+                        (slideOutVertically(tween(OloMotion.Quick)) { h -> -dir * h / 2 } + fadeOut(tween(OloMotion.Quick)))
+                },
+                label = "title",
+            ) { (t, _) ->
+                Text(t, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            }
             Icon(OloIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(18.dp).padding(start = 2.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (onArrows != null) {
@@ -356,6 +405,8 @@ private fun QuickAddBar(day: LocalDate, controller: CalendarController, onOpenEd
     val focus = LocalFocusManager.current
     val use24 = LocalUse24Hour.current
     LaunchedEffect(note) { if (note != null) { delay(4500); note = null } }
+    var lastNote by remember { mutableStateOf(note) }
+    if (note != null) lastNote = note
     fun submit() {
         val t = text.trim()
         if (t.isEmpty()) { onOpenEditor(); return }
@@ -373,7 +424,12 @@ private fun QuickAddBar(day: LocalDate, controller: CalendarController, onOpenEd
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        note?.let { (msg, id) ->
+        AnimatedVisibility(
+            visible = note != null,
+            enter = slideInVertically(tween(OloMotion.Medium, easing = OloMotion.EmphasizedDecelerate)) { it } + fadeIn(tween(OloMotion.Medium)),
+            exit = slideOutVertically(tween(OloMotion.Quick)) { it } + fadeOut(tween(OloMotion.Quick)),
+        ) {
+          lastNote?.let { (msg, id) ->
             Surface(color = MaterialTheme.colorScheme.inverseSurface, contentColor = MaterialTheme.colorScheme.inverseOnSurface, shape = MaterialTheme.shapes.small, shadowElevation = 4.dp) {
                 Row(Modifier.padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(msg, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
@@ -383,6 +439,7 @@ private fun QuickAddBar(day: LocalDate, controller: CalendarController, onOpenEd
                     )
                 }
             }
+        }
         }
         Surface(
             shape = RoundedCornerShape(28.dp),
@@ -522,3 +579,17 @@ private fun MonthPicker(current: YearMonth, today: LocalDate, onPick: (YearMonth
     )
 }
 
+
+/** The calendar tree's actions for the wide screen's sheet (no drawer to close). */
+private fun calendarNav(state: CalendarUiState, controller: CalendarController, onAction: (SyncAction) -> Unit) = NavActions(
+    state = state,
+    onView = controller::setView,
+    onShown = controller::setShown,
+    onShowOnly = controller::showOnly,
+    onShowDefault = controller::showDefault,
+    onFold = controller::setFolded,
+    onAction = onAction,
+    onCalendars = {},
+    onSyncNow = controller::syncNow,
+    onSettings = {},
+)

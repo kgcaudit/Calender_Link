@@ -1,6 +1,25 @@
 package app.olo.calendar.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import app.olo.calendar.design.OloMotion
+import app.olo.calendar.model.YearMonth
+import app.olo.calendar.model.weekStartOf
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -136,12 +155,14 @@ internal fun MonthBody(
     val showLunar = state.settings.showLunar
     if (wide) {
         Row(Modifier.fillMaxSize()) {
-            MonthGrid(state, holidayCalendars, onSelect, controller::step, null, OloLayout.GridMarginWide, Modifier.weight(0.6f).fillMaxHeight())
+            MonthPages(state, controller, Modifier.weight(0.6f).fillMaxHeight(), vertical = state.settings.verticalPagingWide) { m ->
+                MonthGrid(m, state, holidayCalendars, onSelect, null, OloLayout.GridMarginWide, Modifier.fillMaxSize())
+            }
             Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
             Box(Modifier.weight(0.4f).fillMaxHeight()) {
                 DaySidePane(
                     day = state.selected,
-                    isToday = state.selected == state.today,
+                    today = state.today,
                     items = dayItems,
                     holidays = dayHolidays,
                     calendars = state.calendarsById,
@@ -168,12 +189,26 @@ internal fun MonthBody(
                 MonthStage.WEEK at week.toPx()
             }
         }
-        LaunchedEffect(anchors) { stage.updateAnchors(anchors, stage.targetValue) }
+        // A 5-week month next to a 6-week one moves the stage anchors; glide to
+        // the new height instead of jumping (docs/05 §5).
+        val correction = remember { Animatable(0f) }
+        LaunchedEffect(anchors) {
+            val before = stage.offset
+            stage.updateAnchors(anchors, stage.targetValue)
+            val after = stage.offset
+            if (!before.isNaN() && !after.isNaN() && abs(before - after) > 1f && !stage.isAnimationRunning) {
+                correction.snapTo(before - after)
+                correction.animateTo(0f, tween(OloMotion.Medium, easing = OloMotion.Emphasized))
+            }
+        }
         // Remember the stage the user leaves the month in.
         LaunchedEffect(stage) {
             snapshotFlow { stage.settledValue }.collect { v -> controller.updateSettings { it.copy(monthStage = v.ordinal + 1) } }
         }
-        val gridHeight = with(density) { (if (stage.offset.isNaN()) anchors.positionOf(stage.currentValue) else stage.offset).toDp() }
+        val gridHeight = with(density) { ((if (stage.offset.isNaN()) anchors.positionOf(stage.currentValue) else stage.offset) + correction.value).toDp() }
+        // Only the selected week is left: page by weeks instead of months.
+        val weekMode = stage.currentValue == MonthStage.WEEK && !stage.offset.isNaN() &&
+            abs(stage.offset - anchors.positionOf(MonthStage.WEEK)) < 1f
 
         val connection = remember(stage) {
             object : NestedScrollConnection {
@@ -197,21 +232,19 @@ internal fun MonthBody(
 
         Column(Modifier.fillMaxSize().anchoredDraggable(stage, Orientation.Vertical)) {
             WeekdayHeader(state, OloLayout.GridMarginCompact, Modifier.height(header))
-            MonthGrid(
-                state, holidayCalendars,
-                onSelect = { d ->
-                    if (d == state.selected && stage.currentValue == MonthStage.FULL) scope.launch { stage.animateTo(MonthStage.LINES) }
-                    onSelect(d)
-                },
-                onSwipe = { dir ->
-                    // One week at a time when only the week is showing.
-                    if (stage.currentValue == MonthStage.WEEK) controller.select(state.selected.plus(7 * dir, DateTimeUnit.DAY)) else controller.step(dir)
-                },
-                gridHeight = gridHeight,
-                margin = OloLayout.GridMarginCompact,
-                modifier = Modifier.height(gridHeight).clipToBounds(),
-                showHeader = false,
-            )
+            val pick = { d: LocalDate ->
+                if (d == state.selected && stage.currentValue == MonthStage.FULL) scope.launch { stage.animateTo(MonthStage.LINES) }
+                onSelect(d)
+            }
+            Box(Modifier.height(gridHeight).clipToBounds()) {
+                if (weekMode) {
+                    WeekPages(state, controller, holidayCalendars, pick)
+                } else {
+                    MonthPages(state, controller, Modifier.fillMaxSize()) { m ->
+                        MonthGrid(m, state, holidayCalendars, pick, gridHeight, OloLayout.GridMarginCompact, Modifier.fillMaxWidth(), showHeader = false)
+                    }
+                }
+            }
             DayPanel(
                 day = state.selected,
                 items = dayItems,
@@ -246,10 +279,52 @@ private fun nearestStage(stage: AnchoredDraggableState<MonthStage>, velocity: Fl
     }
 }
 
-internal fun viewTitle(s: CalendarUiState): String = when {
-    s.view == ViewMode.YEAR -> "${s.selected.year}년"
-    s.month.year == s.today.year -> "${s.month.month}월"
+/** Always with the year (docs/05 §4): "2026년 10월". */
+internal fun viewTitle(s: CalendarUiState): String = when (s.view) {
+    ViewMode.YEAR -> "${s.selected.year}년"
     else -> s.month.koTitle()
+}
+
+/** Month pages; a settled swipe shows that month (the day number is kept). */
+@Composable
+internal fun MonthPages(
+    state: CalendarUiState,
+    controller: CalendarController,
+    modifier: Modifier,
+    vertical: Boolean = false,
+    content: @Composable (YearMonth) -> Unit,
+) {
+    DatePager(
+        target = state.month.index,
+        onSettle = { controller.showMonth(YearMonth.ofIndex(it)) },
+        modifier = modifier,
+        vertical = vertical,
+    ) { i -> content(YearMonth.ofIndex(i)) }
+}
+
+/** Stage 3: the selected week as one row of lines, paged a week at a time. */
+@Composable
+private fun WeekPages(state: CalendarUiState, controller: CalendarController, holidayCalendars: Set<String>, onSelect: (LocalDate) -> Unit) {
+    val start = weekStartOf(state.selected, state.settings.weekStart)
+    val offset = state.selected.toEpochDays() - start.toEpochDays()
+    DatePager(
+        target = start.toEpochDays() / 7,
+        onSettle = { w -> controller.select(LocalDate.fromEpochDays(w * 7 + (start.toEpochDays() % 7) + offset)) },
+        modifier = Modifier.fillMaxSize(),
+        key = state.settings.weekStart,
+    ) { w ->
+        val first = LocalDate.fromEpochDays(w * 7 + (start.toEpochDays() % 7))
+        val week = List(7) { first.plus(it, DateTimeUnit.DAY) }
+        val month = YearMonth.of(week.firstOrNull { it == state.selected } ?: week[offset])
+        Row(Modifier.fillMaxWidth().height(OloLayout.LinesRow).padding(horizontal = OloLayout.GridMarginCompact)) {
+            WeekRow(
+                week = week, month = month, state = state,
+                events = state.occurrences.filter { it.calendarId !in holidayCalendars },
+                holidayCalendars = holidayCalendars, onSelect = onSelect, textAlpha = 0f,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
+        }
+    }
 }
 
 @Composable
@@ -282,32 +357,49 @@ private val WeekNumberColumn = 18.dp
  */
 @Composable
 internal fun MonthGrid(
+    month: YearMonth,
     state: CalendarUiState,
     holidayCalendars: Set<String>,
     onSelect: (LocalDate) -> Unit,
-    onSwipe: (Int) -> Unit,
     gridHeight: Dp?,
     margin: Dp,
     modifier: Modifier,
     showHeader: Boolean = true,
 ) {
-    val days = monthGrid(state.month, state.settings.weekStart)
+    val days = monthGrid(month, state.settings.weekStart)
     val weeks = days.chunked(7)
-    var drag by remember(state.month) { mutableStateOf(0f) }
     val visibleEvents = state.occurrences.filter { it.calendarId !in holidayCalendars }
+    val selectedHere = state.selected in days && YearMonth.of(state.selected) == month
+    // A neighbour page keeps the same row open as the selected one: the week holding the same weekday-and-number, else the first.
     val selectedWeek = weeks.indexOfFirst { state.selected in it }.coerceAtLeast(0)
-    Column(
-        modifier.fillMaxWidth().pointerInput(state.month, state.selected) {
-            detectHorizontalDragGestures(
-                onDragStart = { drag = 0f },
-                onDragEnd = {
-                    // Next page comes in from the right, as a page turns (OLO motion rule).
-                    if (drag < -80f) onSwipe(1) else if (drag > 80f) onSwipe(-1)
-                    drag = 0f
-                },
-            ) { _, dx -> drag += dx }
+
+    // The selection outline is drawn once over the grid and glides between days (docs/05 §6 #4).
+    var gridCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var target by remember { mutableStateOf<Rect?>(null) }
+    val outline = remember { Animatable(Rect.Zero, Rect.VectorConverter) }
+    var outlineDay by remember { mutableStateOf<LocalDate?>(null) }
+    LaunchedEffect(target, state.selected) {
+        val r = target ?: return@LaunchedEffect
+        if (outlineDay != null && outlineDay != state.selected && outline.value != Rect.Zero) {
+            outline.animateTo(r, tween(OloMotion.Short, easing = OloMotion.Emphasized))
+        } else {
+            outline.snapTo(r)
+        }
+        outlineDay = state.selected
+    }
+    val primary = MaterialTheme.colorScheme.primary
+    val density = LocalDensity.current
+    Box(
+        modifier.onGloballyPositioned { gridCoords = it }.drawWithContent {
+            drawContent()
+            if (selectedHere && outline.value != Rect.Zero) {
+                val w = with(density) { 1.5.dp.toPx() }
+                val r = outline.value.deflate(w / 2)
+                drawRoundRect(primary, r.topLeft, r.size, CornerRadius(with(density) { 10.dp.toPx() }), style = Stroke(w))
+            }
         },
     ) {
+    Column(Modifier.fillMaxWidth().then(if (gridHeight == null) Modifier.fillMaxHeight() else Modifier)) {
         if (showHeader) WeekdayHeader(state, margin, Modifier.padding(vertical = 4.dp))
         val gap = OloLayout.CellGap
         weeks.forEachIndexed { i, week ->
@@ -333,65 +425,83 @@ internal fun MonthGrid(
                 }
                 WeekRow(
                     week = week,
+                    month = month,
                     state = state,
                     events = visibleEvents,
                     holidayCalendars = holidayCalendars,
                     onSelect = onSelect,
-                    lines = rowH != null && rowH < 64.dp,
+                    // Lines below 52dp+, titles from 76dp; in between the two cross-fade (docs/05 §6 #7).
+                    textAlpha = rowH?.let { ((it - OloLayout.LinesRow) / (TextRowFrom - OloLayout.LinesRow)).coerceIn(0f, 1f) } ?: 1f,
+                    onSelectedPlaced = { c -> gridCoords?.let { g -> if (g.isAttached && c.isAttached) target = Rect(g.localPositionOf(c, Offset.Zero), c.size.let { androidx.compose.ui.geometry.Size(it.width.toFloat(), it.height.toFloat()) }) } },
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
             }
             if (rowH != null) Spacer(Modifier.height(gap))
         }
     }
+    }
 }
+
+private val TextRowFrom = 76.dp
 
 @Composable
 private fun WeekRow(
     week: List<LocalDate>,
+    month: YearMonth,
     state: CalendarUiState,
     events: List<Occurrence>,
     holidayCalendars: Set<String>,
     onSelect: (LocalDate) -> Unit,
-    lines: Boolean,
+    textAlpha: Float,
     modifier: Modifier,
+    onSelectedPlaced: ((LayoutCoordinates) -> Unit)? = null,
 ) {
     BoxWithConstraints(modifier.fillMaxWidth()) {
         val gap = OloLayout.CellGap
         val colW = (maxWidth + gap) / 7
-        val laneH = if (lines) LineLane else LaneHeight
-        val lanes = ((maxHeight - NumberRow - 2.dp) / laneH).toInt().coerceAtLeast(0)
+        val textLanes = ((maxHeight - NumberRow - 2.dp) / LaneHeight).toInt().coerceAtLeast(0)
+        val lineLanes = ((maxHeight - NumberRow - 2.dp) / LineLane).toInt().coerceAtLeast(0)
         val measurer = rememberTextMeasurer()
         val density = LocalDensity.current
         // Room for a title on one line: a bar loses its insets and padding, a timed item its tile.
         val barRoom = with(density) { (colW - gap - 12.dp).toPx() }
         val timedRoom = with(density) { (colW - gap - 14.dp).toPx() }
-        val layout = remember(week, events, colW, lanes, lines) {
-            layoutWeek(week, events, lanes) { o ->
-                if (lines) return@layoutWeek false
+        val showText = textAlpha > 0f
+        val showLines = textAlpha < 1f
+        val textLayout = if (!showText) null else remember(week, events, colW, textLanes) {
+            layoutWeek(week, events, textLanes) { o ->
                 val w = measurer.measure(o.title.ifBlank { "(제목 없음)" }, SegmentText, maxLines = 1, softWrap = false).size.width
                 w > if (o.allDay) barRoom else timedRoom
             }
         }
+        val lineLayout = if (!showLines) null else remember(week, events, lineLanes) { layoutWeek(week, events, lineLanes) { false } }
+        val layout = if (textAlpha >= 0.5f) textLayout!! else lineLayout!!
 
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
             week.forEachIndexed { i, day ->
+                val selected = day == state.selected && day.monthNumber == month.month
                 DayCell(
                     day = day,
-                    inMonth = day.monthNumber == state.month.month,
+                    inMonth = day.monthNumber == month.month,
                     isToday = day == state.today,
-                    isSelected = day == state.selected,
+                    // The outline itself is drawn by the grid; the strip of stage 3 draws its own.
+                    isSelected = selected && onSelectedPlaced == null,
                     isHoliday = holidayNames(day, state.occurrences, holidayCalendars).isNotEmpty(),
                     hidden = layout.hiddenPerDay[i],
                     lunarOn = state.settings.showLunar,
                     onClick = { onSelect(day) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).then(
+                        if (selected && onSelectedPlaced != null) Modifier.onGloballyPositioned(onSelectedPlaced) else Modifier,
+                    ),
                 )
             }
         }
-        layout.segments.forEach { seg ->
-            val outside = week[seg.startCol].monthNumber != state.month.month && week[seg.endCol].monthNumber != state.month.month
-            if (lines) LineSegment(seg, colW, gap, outside) else Segment(seg, colW, gap, faded = outside)
+        val outside = { seg: WeekSegment -> week[seg.startCol].monthNumber != month.month && week[seg.endCol].monthNumber != month.month }
+        if (lineLayout != null) Box(Modifier.fillMaxSize().graphicsLayer { alpha = 1f - textAlpha }) {
+            lineLayout.segments.forEach { seg -> LineSegment(seg, colW, gap, outside(seg)) }
+        }
+        if (textLayout != null) Box(Modifier.fillMaxSize().graphicsLayer { alpha = textAlpha }) {
+            textLayout.segments.forEach { seg -> Segment(seg, colW, gap, faded = outside(seg)) }
         }
     }
 }
@@ -528,17 +638,19 @@ private fun DayPanel(
             ) {
                 Box(Modifier.size(width = 36.dp, height = 4.dp).background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(2.dp)))
             }
-            Column(Modifier.weight(1f).graphicsLayer { alpha = contentAlpha() }) {
-            DayHeader(day, holidays, showLunar, Modifier.padding(horizontal = OloLayout.ContentMargin))
-            if (items.isEmpty()) {
-                Text(
-                    "일정이 없습니다. 아래 입력줄에 적어 바로 추가할 수 있습니다.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(OloLayout.ContentMargin),
-                )
-            }
-            DayItems(items, calendars, zone, onOpen, endPadding = OloLayout.ContentMargin)
+            DaySwap(day, items, holidays, Modifier.weight(1f).graphicsLayer { alpha = contentAlpha() }) { d, its, hs ->
+                Column(Modifier.fillMaxSize()) {
+                    DayHeader(d, hs, showLunar, Modifier.padding(horizontal = OloLayout.ContentMargin))
+                    if (its.isEmpty()) {
+                        Text(
+                            "일정이 없습니다. 아래 입력줄에 적어 바로 추가할 수 있습니다.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(OloLayout.ContentMargin),
+                        )
+                    }
+                    DayItems(its, calendars, zone, onOpen, endPadding = OloLayout.ContentMargin)
+                }
             }
         }
     }
@@ -609,7 +721,7 @@ internal fun DayItems(
 @Composable
 private fun DaySidePane(
     day: LocalDate,
-    isToday: Boolean,
+    today: LocalDate,
     items: List<Occurrence>,
     holidays: List<String>,
     calendars: Map<String, CalendarInfo>,
@@ -618,6 +730,8 @@ private fun DaySidePane(
     showLunar: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
+    DaySwap(day, items, holidays, Modifier.fillMaxSize()) { day, items, holidays ->
+    val isToday = day == today
     Column(Modifier.fillMaxSize().padding(top = 8.dp)) {
         Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -652,4 +766,32 @@ private fun DaySidePane(
         }
         DayItems(items, calendars, zone, onOpen, endPadding = 16.dp)
     }
+    }
+}
+
+/**
+ * The selected day's content, sliding a little in the direction of travel and
+ * fading as the day changes (docs/05 §6 #5); the outgoing day keeps its own events.
+ */
+@Composable
+private fun DaySwap(
+    day: LocalDate,
+    items: List<Occurrence>,
+    holidays: List<String>,
+    modifier: Modifier,
+    content: @Composable (LocalDate, List<Occurrence>, List<String>) -> Unit,
+) {
+    AnimatedContent(
+        targetState = Triple(day, items, holidays),
+        contentKey = { it.first },
+        transitionSpec = {
+            val dir = if (targetState.first > initialState.first) 1 else -1
+            (slideInHorizontally(tween(OloMotion.Short, easing = OloMotion.EmphasizedDecelerate)) { w -> dir * w / 8 } +
+                fadeIn(tween(OloMotion.Short))) togetherWith
+                (slideOutHorizontally(tween(OloMotion.Quick, easing = OloMotion.EmphasizedAccelerate)) { w -> -dir * w / 8 } +
+                    fadeOut(tween(OloMotion.Quick)))
+        },
+        modifier = modifier,
+        label = "day",
+    ) { (d, its, hs) -> content(d, its, hs) }
 }

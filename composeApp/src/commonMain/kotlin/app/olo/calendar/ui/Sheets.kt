@@ -143,8 +143,7 @@ internal fun reminderLabel(min: Int): String = when {
 
 @Composable
 fun CalendarsSheet(
-    state: CalendarUiState,
-    onToggle: (String, Boolean) -> Unit,
+    nav: NavActions,
     onOpenSync: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -153,46 +152,14 @@ fun CalendarsSheet(
             Text("캘린더", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             OloTextButton("동기화 상태", onOpenSync)
         }
-        val holidaySources = state.calendars.count { it.isHoliday && it.visible }
-        if (holidaySources > 0) {
-            Text(
-                "공휴일은 OLO가 직접 표시합니다. 공휴일 캘린더는 꺼 두어도 됩니다.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        Text(
+            "표시 여부는 OLO에만 적용됩니다. 삼성·Google 캘린더 앱의 설정은 바뀌지 않습니다. 길게 누르면 '이것만 보기'.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Column(Modifier.verticalScroll(rememberScrollState())) {
-            state.calendars.groupBy { it.accountName to it.kind }.forEach { (key, cals) ->
-                Text(
-                    "${key.first} · ${key.second.koLabel()}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-                )
-                cals.forEach { c ->
-                    Row(
-                        Modifier.fillMaxWidth().clickable { onToggle(c.id, !c.visible) }.padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(checked = c.visible, onCheckedChange = { onToggle(c.id, it) })
-                        Tile(if (c.isHoliday) MaterialTheme.colorScheme.error else calendarColor(c.colorArgb), 14.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(c.name, style = MaterialTheme.typography.bodyLarge)
-                            val n = state.eventCounts[c.id] ?: 0
-                            val notes = buildList {
-                                if (n > 0) add("일정 ${n}개")
-                                if (!c.writable) add("읽기 전용")
-                                if (c.isHoliday) add("공휴일")
-                                if (c.kind != SyncKind.GOOGLE && c.writable) add("다른 기기로 동기화되지 않음")
-                            }
-                            if (notes.isNotEmpty()) {
-                                Text(notes.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
-                }
-            }
+            CalendarTree(nav, horizontal = 0.dp)
+            nav.state.syncActions.forEach { ActionCard(it, nav.state, nav.onAction) }
         }
     }
 }
@@ -384,6 +351,7 @@ fun SettingsSheet(state: CalendarUiState, onChange: ((AppSettings) -> AppSetting
             SettingSwitch("한국 음력 표시", "일요일과 음력 1일·15일에 음력 날짜를 보여 줍니다.", st.showLunar) { v -> onChange { it.copy(showLunar = v) } }
             SettingSwitch("몇 번째 주인지 표시", "월 보기 왼쪽에 주 번호(ISO)를 보여 줍니다.", st.showWeekNumbers) { v -> onChange { it.copy(showWeekNumbers = v) } }
             SettingSwitch("일정 목록에서 지난 날짜 숨기기", "일정 보기를 오늘부터 보여 줍니다.", st.hidePastInAgenda) { v -> onChange { it.copy(hidePastInAgenda = v) } }
+            SettingSwitch("넓은 화면에서 달을 위아래로 넘기기", "폴드를 펼쳤을 때 월 보기를 위아래로 넘깁니다. 휴대폰 화면은 위아래 끌기가 달력 접기라서 항상 좌우로 넘깁니다.", st.verticalPagingWide) { v -> onChange { it.copy(verticalPagingWide = v) } }
 
             Text("새 일정", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("기본 캘린더", style = MaterialTheme.typography.bodyLarge)

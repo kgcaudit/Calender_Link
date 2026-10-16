@@ -1,5 +1,10 @@
 package app.olo.calendar.ui
 
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.filter
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -73,7 +78,7 @@ import kotlinx.datetime.toLocalDateTime
 
 /** Twelve small months; days that hold events are tinted, as in Samsung's year view. */
 @Composable
-fun YearView(state: CalendarUiState, holidayCalendars: Set<String>, onOpen: (LocalDate) -> Unit, onSwipe: (Int) -> Unit) {
+fun YearView(state: CalendarUiState, holidayCalendars: Set<String>, onOpen: (LocalDate) -> Unit, onYear: (Int) -> Unit) {
     val busy = remember(state.occurrences, holidayCalendars) {
         buildSet {
             state.occurrences.filter { it.calendarId !in holidayCalendars }.forEach { o ->
@@ -83,27 +88,44 @@ fun YearView(state: CalendarUiState, holidayCalendars: Set<String>, onOpen: (Loc
             }
         }
     }
-    var drag by remember { mutableStateOf(0f) }
-    BoxWithConstraints(
-        Modifier.fillMaxSize().pointerInput(state.selected.year) {
-            detectHorizontalDragGestures(onDragStart = { drag = 0f }, onDragEnd = {
-                if (drag < -80f) onSwipe(1) else if (drag > 80f) onSwipe(-1)
-            }) { _, dx -> drag += dx }
-        },
-    ) {
+    // Years scroll on, one after another (docs/05 §4); the year at the top becomes the current one.
+    val base = remember { state.selected.year - YearSpan }
+    val list = rememberLazyListState(initialFirstVisibleItemIndex = YearSpan)
+    val report = rememberUpdatedState(onYear)
+    LaunchedEffect(list) {
+        snapshotFlow { list.isScrollInProgress to list.firstVisibleItemIndex }
+            .filter { !it.first }.map { it.second }.distinctUntilChanged()
+            .collect { report.value(base + it) }
+    }
+    LaunchedEffect(state.selected.year) {
+        val i = state.selected.year - base
+        if (!list.isScrollInProgress && list.firstVisibleItemIndex != i) list.animateScrollToItem(i)
+    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
         val cols = if (maxWidth >= WideLayout) 4 else 3
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
-            (1..12).chunked(cols).forEach { row ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    row.forEach { m ->
-                        MiniMonth(YearMonth(state.selected.year, m), state, busy, holidayCalendars, onOpen, Modifier.weight(1f))
+        LazyColumn(state = list, contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 88.dp), modifier = Modifier.fillMaxSize()) {
+            items(YearSpan * 2 + 1, key = { base + it }) { i ->
+                val year = base + i
+                Column {
+                    Text(
+                        "${year}년", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
+                        color = if (year == state.today.year) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(start = 6.dp, top = 12.dp, bottom = 2.dp),
+                    )
+                    (1..12).chunked(cols).forEach { row ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            row.forEach { m ->
+                                MiniMonth(YearMonth(year, m), state, busy, holidayCalendars, onOpen, Modifier.weight(1f))
+                            }
+                        }
                     }
                 }
             }
-            Spacer(Modifier.height(88.dp))
         }
     }
 }
+
+private const val YearSpan = 60
 
 @Composable
 private fun MiniMonth(
@@ -190,25 +212,48 @@ fun TimeGridView(
     single: Boolean,
     onOpen: (Occurrence) -> Unit,
     onNewAt: (LocalDate, LocalTime?) -> Unit,
-    onSwipe: (Int) -> Unit,
+    onPickDay: (LocalDate) -> Unit,
+) {
+    // Pages follow the finger (docs/05 §5): a day per page, or a week keeping the weekday.
+    if (single) {
+        DatePager(
+            target = state.selected.toEpochDays(),
+            onSettle = { controller.select(LocalDate.fromEpochDays(it)) },
+            modifier = Modifier.fillMaxSize(),
+        ) { d -> TimeGridPage(state, controller, holidayCalendars, true, LocalDate.fromEpochDays(d), onOpen, onNewAt, onPickDay) }
+    } else {
+        val start = weekStartOf(state.selected, state.settings.weekStart)
+        val offset = state.selected.toEpochDays() - start.toEpochDays()
+        val residue = start.toEpochDays() % 7
+        DatePager(
+            target = start.toEpochDays() / 7,
+            onSettle = { w -> controller.select(LocalDate.fromEpochDays(w * 7 + residue + offset)) },
+            modifier = Modifier.fillMaxSize(),
+            key = state.settings.weekStart,
+        ) { w -> TimeGridPage(state, controller, holidayCalendars, false, LocalDate.fromEpochDays(w * 7 + residue), onOpen, onNewAt, onPickDay) }
+    }
+}
+
+@Composable
+private fun TimeGridPage(
+    state: CalendarUiState,
+    controller: CalendarController,
+    holidayCalendars: Set<String>,
+    single: Boolean,
+    anchor: LocalDate,
+    onOpen: (Occurrence) -> Unit,
+    onNewAt: (LocalDate, LocalTime?) -> Unit,
     onPickDay: (LocalDate) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val zone = controller.zone
     val use24 = LocalUse24Hour.current
-    val days = if (single) listOf(state.selected) else List(7) { weekStartOf(state.selected, state.settings.weekStart).plus(it, DateTimeUnit.DAY) }
+    val days = if (single) listOf(anchor) else List(7) { anchor.plus(it, DateTimeUnit.DAY) }
     val events = state.occurrences.filter { it.calendarId !in holidayCalendars }
-    var drag by remember { mutableStateOf(0f) }
-    Column(
-        Modifier.fillMaxSize().pointerInput(state.selected, single) {
-            detectHorizontalDragGestures(onDragStart = { drag = 0f }, onDragEnd = {
-                if (drag < -80f) onSwipe(1) else if (drag > 80f) onSwipe(-1)
-            }) { _, dx -> drag += dx }
-        },
-    ) {
+    Column(Modifier.fillMaxSize()) {
         // Day headers.
         if (single) {
-            val d = state.selected
+            val d = anchor
             val holidays = holidayNames(d, state.occurrences, holidayCalendars)
             Row(Modifier.padding(start = 16.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 val red = d.dayOfWeek == DayOfWeek.SUNDAY || holidays.isNotEmpty()

@@ -2,12 +2,14 @@ package app.olo.calendar.ui
 
 import app.olo.calendar.model.AppSettings
 import app.olo.calendar.model.CalendarInfo
+import app.olo.calendar.model.SyncKind
 import app.olo.calendar.model.MemoryPreferences
 import app.olo.calendar.model.Preferences
 import app.olo.calendar.model.ViewMode
 import app.olo.calendar.model.loadSettings
 import app.olo.calendar.model.saveSettings
 import app.olo.calendar.model.weekStartOf
+import app.olo.calendar.model.isShown
 import kotlinx.datetime.DatePeriod
 import app.olo.calendar.model.EventDraft
 import app.olo.calendar.model.MovePlan
@@ -40,6 +42,9 @@ data class CalendarUiState(
     val selected: LocalDate,
     val today: LocalDate,
     val calendars: List<CalendarInfo> = emptyList(),
+    /** Every occurrence in the loaded range, hidden calendars included. */
+    val allOccurrences: List<Occurrence> = emptyList(),
+    /** What the views draw: [allOccurrences] of the calendars OLO shows. */
     val occurrences: List<Occurrence> = emptyList(),
     val sync: SyncStatus = SyncStatus(),
     val eventCounts: Map<String, Int> = emptyMap(),
@@ -50,18 +55,29 @@ data class CalendarUiState(
 ) {
     val calendarsById: Map<String, CalendarInfo> get() = calendars.associateBy { it.id }
 
-    /** Writable calendars outside Google that hold events: those events never reach the iPhone. */
+    /**
+     * Phone-only or Samsung-cloud calendars that hold events: those never reach the
+     * iPhone. Exchange and iCloud travel by their own servers, so they are not listed.
+     */
     val stranded: List<Pair<CalendarInfo, Int>>
-        get() = calendars.filter { it.writable && !it.isHoliday && !it.kind.reachesGoogle }
+        get() = calendars.filter { it.writable && !it.isHoliday && (it.kind == SyncKind.DEVICE || it.kind == SyncKind.SAMSUNG) }
             .mapNotNull { c -> (eventCounts[c.id] ?: 0).takeIf { it > 0 }?.let { c to it } }
 
     val googleTargets: List<CalendarInfo>
         get() = calendars.filter { it.kind.reachesGoogle && it.writable && !it.isHoliday }
             .sortedWith(compareBy({ !it.isPrimary }, { it.name }))
 
-    /** Something stops events from reaching the other phone. */
-    val needsSyncAttention: Boolean
-        get() = !sync.masterSyncOn || sync.accountsWithSyncOff.isNotEmpty() || stranded.isNotEmpty()
+    /** What stops events from reaching the other phone, each with its own fix (docs/05 §3.4). */
+    val syncActions: List<SyncAction>
+        get() = buildList {
+            if (!sync.masterSyncOn) add(SyncAction.MasterSyncOff)
+            sync.accountsWithSyncOff.forEach { add(SyncAction.AccountSyncOff(it)) }
+            stranded.forEach { (c, n) -> add(SyncAction.Stranded(c, n)) }
+        }
+
+    val needsSyncAttention: Boolean get() = syncActions.isNotEmpty()
+
+    fun isShown(c: CalendarInfo): Boolean = settings.isShown(c)
 
     /** Where a new event goes: the chosen default, else a writable primary Google calendar. */
     val defaultCalendar: CalendarInfo?
@@ -99,9 +115,16 @@ class CalendarController(
         }
     }
 
+    /** A month page settled: keep the day number (31 → the month's last day), or today in today's month. */
     fun showMonth(month: YearMonth) {
+        val s0 = _state.value
+        if (s0.month == month) return
         _state.update { s ->
-            val sel = if (YearMonth.of(s.selected) == month) s.selected else month.firstDay
+            val sel = when {
+                YearMonth.of(s.selected) == month -> s.selected
+                YearMonth.of(s.today) == month -> s.today
+                else -> LocalDate(month.year, month.month, minOf(s.selected.dayOfMonth, month.length))
+            }
             s.copy(month = month, selected = sel)
         }
         reload()
@@ -109,9 +132,38 @@ class CalendarController(
 
     fun select(day: LocalDate) {
         val before = _state.value
+        if (before.selected == day) return
         _state.update { it.copy(selected = day, month = YearMonth.of(day)) }
-        if (range(before).let { (a, b) -> day < a || day >= b } || before.view == ViewMode.WEEK || before.view == ViewMode.DAY) reload()
+        val moved = when (before.view) {
+            ViewMode.MONTH, ViewMode.AGENDA -> YearMonth.of(day) != before.month
+            ViewMode.YEAR -> day.year != before.selected.year
+            ViewMode.WEEK -> weekStartOf(day, before.settings.weekStart) != weekStartOf(before.selected, before.settings.weekStart)
+            ViewMode.DAY -> true
+        }
+        if (moved || range(before).let { (a, b) -> day < a || day >= b }) reload()
     }
+
+    /** Year view scrolled to another year. */
+    fun showYear(year: Int) {
+        val s = _state.value
+        if (s.selected.year == year) return
+        val m = s.selected.monthNumber
+        select(LocalDate(year, m, minOf(s.selected.dayOfMonth, YearMonth(year, m).length)))
+    }
+
+    // --- which calendars OLO shows (docs/05 §3.3) ---
+
+    fun setShown(ids: Collection<String>, shown: Boolean) =
+        updateSettings { st -> st.copy(visibility = st.visibility + ids.associateWith { shown }) }
+
+    /** "이것만 보기": this calendar on, every other one off. */
+    fun showOnly(id: String) =
+        updateSettings { st -> st.copy(visibility = _state.value.calendars.associate { it.id to (it.id == id) }) }
+
+    /** Back to OLO's defaults (everything but holiday copies). */
+    fun showDefault() = updateSettings { it.copy(visibility = emptyMap()) }
+
+    fun setFolded(key: String, folded: Boolean) = updateSettings { it.copy(folded = it.folded + (key to folded)) }
 
     fun goToday() {
         val t = todayNow
@@ -130,7 +182,8 @@ class CalendarController(
             }.onSuccess { l ->
                 _state.update {
                     it.copy(
-                        calendars = l.calendars, occurrences = l.occurrences, sync = l.sync, eventCounts = l.counts,
+                        calendars = l.calendars, allOccurrences = l.occurrences, sync = l.sync, eventCounts = l.counts,
+                        occurrences = shownOf(l.occurrences, l.calendars, it.settings),
                         loading = false, error = null, today = todayNow,
                     )
                 }
@@ -140,12 +193,16 @@ class CalendarController(
         }
     }
 
-    /** Days [from, to) the current view needs. */
+    /**
+     * Days [from, to) the current view needs, with the neighbouring page on each
+     * side, so a page already holds its events while it slides in (docs/05 §5).
+     */
     private fun range(s: CalendarUiState): Pair<LocalDate, LocalDate> = when (s.view) {
-        ViewMode.YEAR -> LocalDate(s.selected.year, 1, 1) to LocalDate(s.selected.year + 1, 1, 1)
-        ViewMode.MONTH -> monthGrid(s.month, s.settings.weekStart).let { it.first() to it.last().plus(1, DateTimeUnit.DAY) }
-        ViewMode.WEEK -> weekStartOf(s.selected, s.settings.weekStart).let { it to it.plus(7, DateTimeUnit.DAY) }
-        ViewMode.DAY -> s.selected to s.selected.plus(1, DateTimeUnit.DAY)
+        ViewMode.YEAR -> LocalDate(s.selected.year - 1, 1, 1) to LocalDate(s.selected.year + 2, 1, 1)
+        ViewMode.MONTH -> monthGrid(s.month.plusMonths(-1), s.settings.weekStart).first() to
+            monthGrid(s.month.plusMonths(1), s.settings.weekStart).last().plus(1, DateTimeUnit.DAY)
+        ViewMode.WEEK -> weekStartOf(s.selected, s.settings.weekStart).let { it.plus(-7, DateTimeUnit.DAY) to it.plus(14, DateTimeUnit.DAY) }
+        ViewMode.DAY -> s.selected.plus(-1, DateTimeUnit.DAY) to s.selected.plus(2, DateTimeUnit.DAY)
         ViewMode.AGENDA -> {
             val start = if (s.settings.hidePastInAgenda) s.today else s.month.firstDay
             start to s.month.firstDay.plus(DatePeriod(months = 3))
@@ -183,7 +240,10 @@ class CalendarController(
         val next = change(before)
         if (next == before) return
         prefs.saveSettings(next)
-        _state.update { it.copy(settings = next) }
+        _state.update {
+            if (next.visibility == before.visibility) it.copy(settings = next)
+            else it.copy(settings = next, occurrences = shownOf(it.allOccurrences, it.calendars, next))
+        }
         if (next.weekStart != before.weekStart || next.hidePastInAgenda != before.hidePastInAgenda) reload()
     }
 
@@ -194,7 +254,9 @@ class CalendarController(
         val t = todayNow
         val from = t.plus(DatePeriod(years = -1)).atStartOfDayIn(zone)
         val to = t.plus(DatePeriod(years = 2)).atStartOfDayIn(zone)
-        return store.search(query, from, to)
+        val s = _state.value
+        val hidden = s.calendars.filter { !s.settings.isShown(it) }.map { it.id }.toSet()
+        return store.search(query, from, to).filter { it.calendarId !in hidden }
     }
 
     /**
@@ -231,13 +293,6 @@ class CalendarController(
         }
     }
 
-    fun setVisible(calendarId: String, visible: Boolean) {
-        scope.launch {
-            runCatching { store.setVisible(calendarId, visible) }
-            reload()
-        }
-    }
-
     fun syncNow() {
         store.requestSync()
         reload()
@@ -266,6 +321,18 @@ class CalendarController(
         return if (endHour >= 24) base.copy(startTime = start, endTime = kotlinx.datetime.LocalTime(23, 59))
         else base.copy(startTime = start, endTime = kotlinx.datetime.LocalTime(endHour, start.minute))
     }
+}
+
+/** One reason events might not reach the other phone. */
+sealed interface SyncAction {
+    data object MasterSyncOff : SyncAction
+    data class AccountSyncOff(val account: String) : SyncAction
+    data class Stranded(val calendar: CalendarInfo, val count: Int) : SyncAction
+}
+
+private fun shownOf(all: List<Occurrence>, calendars: List<CalendarInfo>, settings: AppSettings): List<Occurrence> {
+    val hidden = calendars.filter { !settings.isShown(it) }.map { it.id }.toSet()
+    return if (hidden.isEmpty()) all else all.filter { it.calendarId !in hidden }
 }
 
 private class Loaded(

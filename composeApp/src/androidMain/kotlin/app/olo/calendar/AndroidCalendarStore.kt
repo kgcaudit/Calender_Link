@@ -30,6 +30,7 @@ import app.olo.calendar.model.androidDuration
 import app.olo.calendar.model.at
 import app.olo.calendar.model.classifyAndroidAccount
 import app.olo.calendar.model.isGoogleHolidayCalendarId
+import app.olo.calendar.model.looksLikeHolidayCalendar
 import app.olo.calendar.model.timedDays
 import app.olo.calendar.store.CalendarStore
 import kotlinx.coroutines.Dispatchers
@@ -65,17 +66,20 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         resolver.query(Calendars.CONTENT_URI, projection, null, null, null).list { c ->
             val owner = c.str(Calendars.OWNER_ACCOUNT)
             val accountType = c.str(Calendars.ACCOUNT_TYPE)
+            val accountName = c.str(Calendars.ACCOUNT_NAME)
+            val name = c.str(Calendars.CALENDAR_DISPLAY_NAME).ifBlank { accountName }
+            val writable = c.int(Calendars.CALENDAR_ACCESS_LEVEL) >= Calendars.CAL_ACCESS_CONTRIBUTOR
             CalendarInfo(
                 id = c.long(Calendars._ID).toString(),
-                name = c.str(Calendars.CALENDAR_DISPLAY_NAME).ifBlank { c.str(Calendars.ACCOUNT_NAME) },
-                accountName = c.str(Calendars.ACCOUNT_NAME),
+                name = name,
+                accountName = accountName,
                 accountType = accountType,
                 kind = classifyAndroidAccount(accountType),
                 colorArgb = c.int(Calendars.CALENDAR_COLOR),
-                writable = c.int(Calendars.CALENDAR_ACCESS_LEVEL) >= Calendars.CAL_ACCESS_CONTRIBUTOR,
+                writable = writable,
                 visible = c.int(Calendars.VISIBLE) == 1,
                 isPrimary = c.int(Calendars.IS_PRIMARY) == 1,
-                isHoliday = isGoogleHolidayCalendarId(owner),
+                isHoliday = looksLikeHolidayCalendar(owner, accountName, name, writable),
             )
         }.sortedWith(compareBy<CalendarInfo>({ it.kind != SyncKind.GOOGLE }, { it.accountName }, { !it.isPrimary }, { it.name }))
     }
@@ -105,7 +109,8 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             Instances.ORIGINAL_ID,
         )
         val z = zone
-        val selection = "${Instances.VISIBLE} = 1" + (extra?.let { " AND $it" } ?: "")
+        // Every calendar: OLO filters by its own visibility (docs/05), not the shared VISIBLE column.
+        val selection = extra
         return resolver.query(uri, projection, selection, extraArgs, "${Instances.BEGIN} ASC").list { c ->
             val begin = c.long(Instances.BEGIN)
             val end = c.long(Instances.END)

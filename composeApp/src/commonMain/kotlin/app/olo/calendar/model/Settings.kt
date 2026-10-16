@@ -17,7 +17,15 @@ data class AppSettings(
     val lastView: ViewMode = ViewMode.MONTH,
     /** Month view stage on a phone: 1 full month, 2 lines + day, 3 one week + day. */
     val monthStage: Int = 1,
+    /** OLO's own show/hide per calendar id; ids not listed follow [CalendarInfo.shownByDefault]. */
+    val visibility: Map<String, Boolean> = emptyMap(),
+    /** Drawer groups the user folded or opened, by key, overriding the default fold. */
+    val folded: Map<String, Boolean> = emptyMap(),
+    /** Month paging on wide screens: false = left/right (default), true = up/down. */
+    val verticalPagingWide: Boolean = false,
 )
+
+fun AppSettings.isShown(c: CalendarInfo): Boolean = visibility[c.id] ?: c.shownByDefault()
 
 /** Small key-value storage (SharedPreferences / NSUserDefaults). */
 interface Preferences {
@@ -41,6 +49,9 @@ fun Preferences.loadSettings(): AppSettings {
         defaultCalendarId = get("defaultCalendarId"),
         lastView = get("lastView")?.let { v -> ViewMode.entries.firstOrNull { it.name == v } } ?: d.lastView,
         monthStage = get("monthStage")?.toIntOrNull()?.coerceIn(1, 3) ?: d.monthStage,
+        visibility = decodeVisibility(get("visibility")),
+        folded = decodeVisibility(get("folded")),
+        verticalPagingWide = get("verticalPagingWide")?.toBooleanStrictOrNull() ?: d.verticalPagingWide,
     )
 }
 
@@ -52,4 +63,7 @@ fun Preferences.saveSettings(s: AppSettings) {
     put("defaultCalendarId", s.defaultCalendarId)
     put("lastView", s.lastView.name)
     put("monthStage", s.monthStage.toString())
+    put("visibility", encodeVisibility(s.visibility))
+    put("folded", encodeVisibility(s.folded))
+    put("verticalPagingWide", s.verticalPagingWide.toString())
 }

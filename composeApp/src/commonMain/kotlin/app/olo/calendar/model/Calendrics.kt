@@ -22,9 +22,13 @@ data class YearMonth(val year: Int, val month: Int) {
     val firstDay: LocalDate get() = LocalDate(year, month, 1)
     fun plusMonths(n: Int): YearMonth = firstDay.plus(DatePeriod(months = n)).let { YearMonth(it.year, it.monthNumber) }
     fun koTitle(): String = "${year}년 ${month}월"
+    val length: Int get() = plusMonths(1).firstDay.plus(-1, DateTimeUnit.DAY).dayOfMonth
+    /** Months since year 0: a pager page index. */
+    val index: Int get() = year * 12 + month - 1
 
     companion object {
         fun of(d: LocalDate) = YearMonth(d.year, d.monthNumber)
+        fun ofIndex(i: Int) = YearMonth(i / 12, i % 12 + 1)
     }
 }
 
