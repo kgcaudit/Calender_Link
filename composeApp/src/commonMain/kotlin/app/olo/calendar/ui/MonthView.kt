@@ -1,5 +1,7 @@
 package app.olo.calendar.ui
 
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
@@ -18,6 +20,8 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import app.olo.calendar.design.OloMotion
+import app.olo.calendar.design.OloTone
+import androidx.compose.ui.draw.drawBehind
 import app.olo.calendar.model.YearMonth
 import app.olo.calendar.model.weekStartOf
 import androidx.compose.foundation.background
@@ -179,7 +183,8 @@ internal fun MonthBody(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val weeks = monthGrid(state.month, state.settings.weekStart).size / 7
         val header = 24.dp
-        val full = maxHeight - header - OloLayout.QuickBarSpace
+        val bandLine = OloTone.bandLine
+        val full = maxHeight - header - 4.dp - OloLayout.QuickBarSpace
         val lines = (OloLayout.LinesRow + OloLayout.CellGap) * weeks
         val week = OloLayout.LinesRow + OloLayout.CellGap
         val anchors = with(density) {
@@ -231,7 +236,14 @@ internal fun MonthBody(
         }
 
         Column(Modifier.fillMaxSize().anchoredDraggable(stage, Orientation.Vertical)) {
-            WeekdayHeader(state, OloLayout.GridMarginCompact, Modifier.height(header))
+            // The weekday row joins the top bar's band; a hairline closes the zone.
+            WeekdayHeader(
+                state, OloLayout.GridMarginCompact,
+                Modifier.background(OloTone.band).height(header).drawBehind {
+                    drawLine(bandLine, Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), 1.dp.toPx())
+                },
+            )
+            Spacer(Modifier.height(4.dp))
             val pick = { d: LocalDate ->
                 if (d == state.selected && stage.currentValue == MonthStage.FULL) scope.launch { stage.animateTo(MonthStage.LINES) }
                 onSelect(d)
@@ -247,6 +259,7 @@ internal fun MonthBody(
             }
             DayPanel(
                 day = state.selected,
+                today = state.today,
                 items = dayItems,
                 holidays = dayHolidays,
                 calendars = state.calendarsById,
@@ -282,6 +295,7 @@ private fun nearestStage(stage: AnchoredDraggableState<MonthStage>, velocity: Fl
 /** Always with the year (docs/05 §4): "2026년 10월". */
 internal fun viewTitle(s: CalendarUiState): String = when (s.view) {
     ViewMode.YEAR -> "${s.selected.year}년"
+    ViewMode.AGENDA -> "일정"
     else -> s.month.koTitle()
 }
 
@@ -543,7 +557,8 @@ private fun DayCell(
     Column(
         modifier
             .fillMaxHeight()
-            .background(cs.surfaceContainerLow, MaterialTheme.shapes.small)
+            // White cells on the ivory ground; today's cell takes the soft clay fill.
+            .background(if (isToday && inMonth) OloTone.container else cs.surfaceContainerLowest, MaterialTheme.shapes.small)
             .then(if (isSelected) Modifier.border(1.5.dp, cs.primary, MaterialTheme.shapes.small) else Modifier)
             .clickable(onClick = onClick),
     ) {
@@ -615,6 +630,7 @@ internal fun Segment(seg: WeekSegment, colW: Dp, gap: Dp, faded: Boolean, top: D
 @Composable
 private fun DayPanel(
     day: LocalDate,
+    today: LocalDate,
     items: List<Occurrence>,
     holidays: List<String>,
     calendars: Map<String, CalendarInfo>,
@@ -640,7 +656,7 @@ private fun DayPanel(
             }
             DaySwap(day, items, holidays, Modifier.weight(1f).graphicsLayer { alpha = contentAlpha() }) { d, its, hs ->
                 Column(Modifier.fillMaxSize()) {
-                    DayHeader(d, hs, showLunar, Modifier.padding(horizontal = OloLayout.ContentMargin))
+                    DayHeader(d, hs, showLunar, Modifier.padding(horizontal = OloLayout.ContentMargin), today = today, count = its.size)
                     if (its.isEmpty()) {
                         Text(
                             "일정이 없습니다. 아래 입력줄에 적어 바로 추가할 수 있습니다.",
@@ -656,28 +672,58 @@ private fun DayPanel(
     }
 }
 
-/** "16 금요일 · 음력 9월 6일 · 공휴일" */
+/**
+ * The day's head (docs/06 §4 ①): a solid date tile — clay for today, the soft
+ * fill otherwise — beside the weekday, with lunar date, holidays and count as
+ * clay accent text.
+ */
 @Composable
-internal fun DayHeader(day: LocalDate, holidays: List<String>, showLunar: Boolean, modifier: Modifier = Modifier) {
+internal fun DayHeader(
+    day: LocalDate,
+    holidays: List<String>,
+    showLunar: Boolean,
+    modifier: Modifier = Modifier,
+    today: LocalDate? = null,
+    count: Int = -1,
+) {
     val cs = MaterialTheme.colorScheme
     val red = holidays.isNotEmpty() || day.dayOfWeek == DayOfWeek.SUNDAY
-    Row(modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
-        Text("${day.dayOfMonth}", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, color = if (red) cs.error else cs.onSurface)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            "${day.dayOfWeek.koShort()}요일",
-            style = MaterialTheme.typography.titleMedium,
-            color = when { red -> cs.error; day.dayOfWeek == DayOfWeek.SATURDAY -> saturdayColor(); else -> cs.onSurface },
-            modifier = Modifier.padding(bottom = 3.dp),
-        )
-        val meta = listOfNotNull(KoreanLunar.fromSolar(day)?.takeIf { showLunar }?.longLabel(), holidays.takeIf { it.isNotEmpty() }?.joinToString(" · "))
-        if (meta.isNotEmpty()) {
-            Spacer(Modifier.width(10.dp))
-            Text(meta.joinToString("  ·  "), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 4.dp))
+    val isToday = day == today
+    val dayColor = when { red -> cs.error; day.dayOfWeek == DayOfWeek.SATURDAY -> saturdayColor(); else -> cs.onSurface }
+    Row(modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(
+            Modifier.size(52.dp).background(if (isToday) OloTone.solid else OloTone.container, RoundedCornerShape(16.dp)),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            val on = if (isToday) OloTone.onSolid(OloTone.solid) else dayColor
+            Text(day.dayOfWeek.koShort(), fontSize = 11.sp, color = on.copy(alpha = 0.85f), lineHeight = 12.sp)
+            Text("${day.dayOfMonth}", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = on, lineHeight = 22.sp)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                (if (isToday) "오늘 · " else "") + "${day.monthNumber}월 ${day.dayOfMonth}일 ${day.dayOfWeek.koShort()}요일",
+                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = if (red && !isToday) cs.error else cs.onSurface,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            val meta = listOfNotNull(
+                KoreanLunar.fromSolar(day)?.takeIf { showLunar }?.longLabel(),
+                holidays.takeIf { it.isNotEmpty() }?.joinToString(" · "),
+                count.takeIf { it > 0 }?.let { "일정 $it" },
+            )
+            if (meta.isNotEmpty()) {
+                Text(meta.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = OloTone.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }
 
+/**
+ * The day's events as Explorer lists folders (docs/06 §4): a solid tile in the
+ * calendar's hue carrying the start time (or a calendar mark for all-day), the
+ * title large, the rest small, dividers starting after the tile.
+ */
 @Composable
 internal fun DayItems(
     items: List<Occurrence>,
@@ -687,31 +733,42 @@ internal fun DayItems(
     endPadding: Dp = 72.dp,
 ) {
     val use24 = LocalUse24Hour.current
+    val cs = MaterialTheme.colorScheme
     LazyColumn(contentPadding = PaddingValues(bottom = 96.dp)) {
         items(items, key = { it.eventId + "@" + it.begin.toEpochMilliseconds() }) { o ->
-            Row(
-                Modifier.fillMaxWidth().clickable { onOpen(o) }
-                    // In the bottom panel the + button floats beside the rows; keep text clear of it.
-                    .padding(start = 16.dp, end = endPadding, top = 10.dp, bottom = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Tile(calendarColor(o.colorArgb), 14.dp)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.width(76.dp)) {
-                    if (o.allDay) {
-                        Text("종일", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        Text(clock(o.begin.toLocalDateTime(zone).time, use24), style = MaterialTheme.typography.bodyMedium)
-                        Text(clock(o.end.toLocalDateTime(zone).time, use24), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val hue = calendarColor(o.colorArgb)
+            Column {
+                Row(
+                    Modifier.fillMaxWidth().clickable { onOpen(o) }
+                        .padding(start = 16.dp, end = endPadding, top = 10.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        Modifier.size(46.dp).background(hue, RoundedCornerShape(14.dp)),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        if (o.allDay) {
+                            Icon(app.olo.calendar.design.OloIcons.Month, contentDescription = "종일", tint = OloTone.glyph(hue), modifier = Modifier.size(22.dp))
+                        } else {
+                            val t = clock(o.begin.toLocalDateTime(zone).time, use24)
+                            val (ampm, hm) = t.split(' ').let { if (it.size == 2) it[0] to it[1] else "" to t }
+                            if (ampm.isNotEmpty()) Text(ampm, fontSize = 9.sp, lineHeight = 10.sp, color = OloTone.glyph(hue))
+                            Text(hm, fontSize = 14.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold, color = OloTone.onSolid(hue))
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(o.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        val sub = listOfNotNull(
+                            if (o.allDay) "종일" else "~ " + clock(o.end.toLocalDateTime(zone).time, use24),
+                            o.location.takeIf { it.isNotBlank() },
+                            calendars[o.calendarId]?.name,
+                        ).joinToString(" · ")
+                        Text(sub, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Column(Modifier.weight(1f)) {
-                    Text(o.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    val sub = listOfNotNull(o.location.takeIf { it.isNotBlank() }, calendars[o.calendarId]?.name).joinToString(" · ")
-                    if (sub.isNotEmpty()) {
-                        Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
+                HorizontalDivider(Modifier.padding(start = 76.dp, end = 16.dp), color = cs.outlineVariant.copy(alpha = 0.5f))
             }
         }
     }
@@ -731,36 +788,8 @@ private fun DaySidePane(
 ) {
     val cs = MaterialTheme.colorScheme
     DaySwap(day, items, holidays, Modifier.fillMaxSize()) { day, items, holidays ->
-    val isToday = day == today
     Column(Modifier.fillMaxSize().padding(top = 8.dp)) {
-        Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.then(
-                    if (isToday) Modifier.background(cs.primary, MaterialTheme.shapes.small)
-                    else Modifier.border(1.5.dp, cs.onSurface, MaterialTheme.shapes.small),
-                ).padding(horizontal = 10.dp, vertical = 2.dp),
-            ) {
-                Text("${day.dayOfMonth}", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold, color = if (isToday) cs.onPrimary else cs.onSurface)
-            }
-            Spacer(Modifier.width(12.dp))
-            val red = holidays.isNotEmpty() || day.dayOfWeek == DayOfWeek.SUNDAY
-            Text(
-                "${day.dayOfWeek.koShort()}요일",
-                style = MaterialTheme.typography.titleLarge,
-                color = when {
-                    red -> cs.error
-                    day.dayOfWeek == DayOfWeek.SATURDAY -> saturdayColor()
-                    else -> cs.onSurface
-                },
-            )
-        }
-        val meta = listOfNotNull(KoreanLunar.fromSolar(day)?.takeIf { showLunar }?.longLabel(), holidays.takeIf { it.isNotEmpty() }?.joinToString(" · "))
-        Row(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp)) {
-            meta.forEachIndexed { i, m ->
-                if (i > 0) Text("  |  ", style = MaterialTheme.typography.bodyMedium, color = cs.outlineVariant)
-                Text(m, style = MaterialTheme.typography.bodyMedium, color = if (i == 1) cs.error else cs.onSurfaceVariant)
-            }
-        }
+        DayHeader(day, holidays, showLunar, Modifier.padding(horizontal = 16.dp), today = today, count = items.size)
         if (items.isEmpty()) {
             Text("일정이 없습니다. + 를 눌러 추가하세요.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(16.dp))
         }

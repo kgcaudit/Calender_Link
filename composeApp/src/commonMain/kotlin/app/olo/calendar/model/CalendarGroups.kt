@@ -130,6 +130,14 @@ fun buildCalendarTree(
     }
 }
 
+fun encodeMap(map: Map<String, String>): String = map.entries.joinToString(",") { "${it.key}=${it.value}" }
+
+fun decodeMap(s: String?): Map<String, String> =
+    s.orEmpty().split(',').mapNotNull { part ->
+        val i = part.lastIndexOf('=')
+        if (i <= 0) null else part.substring(0, i) to part.substring(i + 1)
+    }.toMap()
+
 /** Stored as "id=1,id=0" (calendar ids are numbers on Android, UUIDs on iOS: no '=' or ','). */
 fun encodeVisibility(map: Map<String, Boolean>): String = map.entries.joinToString(",") { "${it.key}=${if (it.value) 1 else 0}" }
 

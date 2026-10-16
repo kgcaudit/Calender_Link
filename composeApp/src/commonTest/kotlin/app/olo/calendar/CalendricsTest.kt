@@ -97,7 +97,7 @@ class CalendricsTest {
     @Test
     fun calendarColoursMapToOloHues() {
         assertEquals(OloHue.FOLDER, oloHueFor(0xFFB95B3B.toInt()))     // clay itself
-        assertEquals(OloHue.DOCUMENT, oloHueFor(0xFF4285F4.toInt()))   // Google blue -> slate
+        assertEquals(OloHue.SKY, oloHueFor(0xFF4285F4.toInt()))        // Google blue -> sky (0.7.0)
         assertEquals(OloHue.IMAGE, oloHueFor(0xFF0B8043.toInt()))      // Google "Basil" green
         assertEquals(OloHue.AUDIO, oloHueFor(0xFFD81B60.toInt()))      // Google "Flamingo/Radicchio"
         assertEquals(OloHue.OTHER, oloHueFor(0xFF616161.toInt()))      // Google "Graphite"

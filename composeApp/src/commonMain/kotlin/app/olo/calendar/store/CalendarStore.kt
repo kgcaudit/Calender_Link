@@ -40,6 +40,16 @@ interface CalendarStore {
 
     suspend fun syncStatus(): SyncStatus
 
+    /**
+     * Turns automatic calendar sync on or off for one Google account, as the
+     * phone's account settings would (docs/06 §3). Returns false when the OS
+     * refuses; the caller then offers the account settings instead.
+     */
+    suspend fun setAccountSync(account: String, on: Boolean): Boolean
+
+    /** The phone-wide auto-sync switch. */
+    suspend fun setMasterSync(on: Boolean): Boolean
+
     /** Asks the OS to sync now. The OS decides when it actually runs. */
     fun requestSync()
 

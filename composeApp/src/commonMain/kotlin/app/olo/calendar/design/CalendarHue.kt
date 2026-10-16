@@ -16,7 +16,30 @@ import kotlin.math.min
  * Proposed for OLO-Design as the calendar mapping; values are the shipping
  * `MaterialTheme.tiles`.
  */
-enum class OloHue { FOLDER, ARCHIVE, IMAGE, VIDEO, AUDIO, DOCUMENT, CODE, APP, OTHER }
+enum class OloHue(val label: String) {
+    FOLDER("클레이"), ARCHIVE("호박"), IMAGE("초록"), VIDEO("보라"), AUDIO("장미"), DOCUMENT("슬레이트"), CODE("청록"), APP("올리브"),
+    /** Calendar-only: Google's and Samsung's default blues (docs/06 §4). Proposed to OLO-Design. */
+    SKY("하늘"),
+    OTHER("회색"),
+}
+
+/** A colour of each hue as an ARGB, for calendars recoloured inside OLO (the store keeps its own). */
+val OloHue.argb: Int
+    get() = when (this) {
+        OloHue.FOLDER -> 0xFFB95B3B.toInt()
+        OloHue.ARCHIVE -> 0xFF8A6A3B.toInt()
+        OloHue.IMAGE -> 0xFF2E8B6B.toInt()
+        OloHue.VIDEO -> 0xFF6A5A9E.toInt()
+        OloHue.AUDIO -> 0xFFB04A6A.toInt()
+        OloHue.DOCUMENT -> 0xFF55606B.toInt()
+        OloHue.CODE -> 0xFF3E7F80.toInt()
+        OloHue.APP -> 0xFF4C7A3E.toInt()
+        OloHue.SKY -> 0xFF3D74B8.toInt()
+        OloHue.OTHER -> 0xFF8B7F74.toInt()
+    }
+
+private val SkyLight = Color(0xFF3D74B8)
+private val SkyDark = Color(0xFF8CB4E8)
 
 private data class HueRef(val hue: OloHue, val degrees: Float)
 
@@ -29,8 +52,7 @@ private val References = listOf(
     HueRef(OloHue.AUDIO, hueOf(0xFFB04A6A.toInt())),
     HueRef(OloHue.CODE, hueOf(0xFF3E7F80.toInt())),
     HueRef(OloHue.APP, hueOf(0xFF4C7A3E.toInt())),
-    // Google/Samsung blues have no tile of their own; slate is the cool family member.
-    HueRef(OloHue.DOCUMENT, 215f),
+    HueRef(OloHue.SKY, 212f),
 )
 
 /** Nearest OLO hue for an ARGB colour; greys and near-greys become [OloHue.OTHER]. */
@@ -42,7 +64,9 @@ fun oloHueFor(argb: Int): OloHue {
     val mn = min(r, min(g, b))
     if (mx - mn < 0.12f) return OloHue.OTHER
     val h = hueOf(argb)
-    return References.minBy { circular(it.degrees, h) }.hue
+    val near = References.minBy { circular(it.degrees, h) }.hue
+    // A greyed blue stays slate; a clear blue (Google #039BE5, Samsung #7FB3E8) is sky, not grey.
+    return if (near == OloHue.SKY && (mx - mn) / mx < 0.3f) OloHue.DOCUMENT else near
 }
 
 fun hueOf(argb: Int): Float {
@@ -78,6 +102,7 @@ fun OloHue.color(): Color {
         OloHue.DOCUMENT -> t.document
         OloHue.CODE -> t.code
         OloHue.APP -> t.app
+        OloHue.SKY -> if (MaterialTheme.colorScheme.background.luminanceIsDark()) SkyDark else SkyLight
         OloHue.OTHER -> t.other
     }
 }

@@ -53,6 +53,8 @@ class ScreenshotTest {
         render("month-drawer", dark = false, drawer = true)
         // The whole drawer at once, down to the sync cards.
         render("month-drawer-tall", dark = false, drawer = true, height = 5200)
+        render("month-drawer-dark", dark = true, drawer = true)
+        render("view-agenda-dark", dark = true, view = ViewMode.AGENDA)
         // Halfway through a swipe to November: the page follows the finger.
         render("month-swipe", dark = false, swipe = 0.45f)
         render("search", dark = false, search = "기전팀")
@@ -159,6 +161,8 @@ private object SampleStore : CalendarStore {
     override suspend fun delete(id: String) = Unit
     override suspend fun setVisible(calendarId: String, visible: Boolean) = Unit
     override suspend fun syncStatus() = SyncStatus(accountsWithSyncOff = listOf("kgcaudit02@gmail.com", "sutest@gmail.com"))
+    override suspend fun setAccountSync(account: String, on: Boolean) = true
+    override suspend fun setMasterSync(on: Boolean) = true
     override fun requestSync() = Unit
     override fun changes(): Flow<Unit> = emptyFlow()
     override suspend fun eventCounts(): Map<String, Int> = mapOf("16" to 412, "6" to 12, "1" to 3, "15" to 40)

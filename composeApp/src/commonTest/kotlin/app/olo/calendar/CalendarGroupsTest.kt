@@ -16,6 +16,8 @@ import app.olo.calendar.model.loadSettings
 import app.olo.calendar.model.looksLikeHolidayCalendar
 import app.olo.calendar.model.saveSettings
 import app.olo.calendar.model.triState
+import app.olo.calendar.design.OloHue
+import app.olo.calendar.design.oloHueFor
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -89,6 +91,16 @@ class CalendarGroupsTest {
     }
 
     @Test
+    fun bluesAreSkyNotGrey() {
+        // Samsung's default and Google's default blue used to fall to slate grey.
+        assertEquals(OloHue.SKY, oloHueFor(0xFF7FB3E8.toInt()))
+        assertEquals(OloHue.SKY, oloHueFor(0xFF039BE5.toInt()))
+        assertEquals(OloHue.DOCUMENT, oloHueFor(0xFF6E7F94.toInt()))   // a greyed blue stays slate
+        assertEquals(OloHue.OTHER, oloHueFor(0xFF888888.toInt()))
+        assertEquals(OloHue.FOLDER, oloHueFor(0xFFB95B3B.toInt()))
+    }
+
+    @Test
     fun triStates() {
         assertEquals(TriState.ALL, triState(listOf("a", "b")) { true })
         assertEquals(TriState.SOME, triState(listOf("a", "b")) { it == "a" })
@@ -99,7 +111,7 @@ class CalendarGroupsTest {
     @Test
     fun settingsRoundTrip() {
         val p = MemoryPreferences()
-        val s = AppSettings(monthStage = 2, visibility = mapOf("16" to false, "3" to true), folded = mapOf("HOLIDAYS" to false), verticalPagingWide = true)
+        val s = AppSettings(monthStage = 2, visibility = mapOf("16" to false, "3" to true), folded = mapOf("HOLIDAYS" to false), verticalPagingWide = true, hues = mapOf("16" to "SKY", "7" to "IMAGE"))
         p.saveSettings(s)
         assertEquals(s.copy(lastView = s.lastView), p.loadSettings())
         assertEquals(mapOf("a" to true, "b" to false), decodeVisibility(encodeVisibility(mapOf("a" to true, "b" to false))))

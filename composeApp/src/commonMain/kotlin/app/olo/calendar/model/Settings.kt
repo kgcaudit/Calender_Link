@@ -23,6 +23,8 @@ data class AppSettings(
     val folded: Map<String, Boolean> = emptyMap(),
     /** Month paging on wide screens: false = left/right (default), true = up/down. */
     val verticalPagingWide: Boolean = false,
+    /** Colours chosen inside OLO, calendar id → OloHue name; the store keeps its own colour (docs/06 §4). */
+    val hues: Map<String, String> = emptyMap(),
 )
 
 fun AppSettings.isShown(c: CalendarInfo): Boolean = visibility[c.id] ?: c.shownByDefault()
@@ -52,6 +54,7 @@ fun Preferences.loadSettings(): AppSettings {
         visibility = decodeVisibility(get("visibility")),
         folded = decodeVisibility(get("folded")),
         verticalPagingWide = get("verticalPagingWide")?.toBooleanStrictOrNull() ?: d.verticalPagingWide,
+        hues = decodeMap(get("hues")),
     )
 }
 
@@ -66,4 +69,5 @@ fun Preferences.saveSettings(s: AppSettings) {
     put("visibility", encodeVisibility(s.visibility))
     put("folded", encodeVisibility(s.folded))
     put("verticalPagingWide", s.verticalPagingWide.toString())
+    put("hues", encodeMap(s.hues))
 }

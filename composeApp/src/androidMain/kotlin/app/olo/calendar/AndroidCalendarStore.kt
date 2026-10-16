@@ -270,6 +270,25 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         SyncStatus(pendingUploads = pending, accountsWithSyncOff = off, masterSyncOn = master)
     }
 
+    // WRITE_SYNC_SETTINGS is a normal permission: granted at install, no prompt.
+    override suspend fun setAccountSync(account: String, on: Boolean): Boolean = io {
+        runCatching {
+            val a = Account(account, "com.google")
+            if (on && ContentResolver.getIsSyncable(a, CalendarContract.AUTHORITY) == 0) {
+                ContentResolver.setIsSyncable(a, CalendarContract.AUTHORITY, 1)
+            }
+            ContentResolver.setSyncAutomatically(a, CalendarContract.AUTHORITY, on)
+            ContentResolver.getSyncAutomatically(a, CalendarContract.AUTHORITY) == on
+        }.getOrDefault(false).also { ok -> if (ok && on) requestSync() }
+    }
+
+    override suspend fun setMasterSync(on: Boolean): Boolean = io {
+        runCatching {
+            ContentResolver.setMasterSyncAutomatically(on)
+            ContentResolver.getMasterSyncAutomatically() == on
+        }.getOrDefault(false).also { ok -> if (ok && on) requestSync() }
+    }
+
     override fun requestSync() {
         val extras = Bundle().apply {
             putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true)

@@ -41,6 +41,8 @@ private object PendingIosStore : CalendarStore {
     override suspend fun delete(id: String) = Unit
     override suspend fun setVisible(calendarId: String, visible: Boolean) = Unit
     override suspend fun syncStatus(): SyncStatus = SyncStatus()
+    override suspend fun setAccountSync(account: String, on: Boolean) = false
+    override suspend fun setMasterSync(on: Boolean) = false
     override fun requestSync() = Unit
     override fun changes(): Flow<Unit> = emptyFlow()
     override suspend fun eventCounts(): Map<String, Int> = emptyMap()

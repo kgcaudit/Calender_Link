@@ -3,6 +3,8 @@ package app.olo.calendar.ui
 import app.olo.calendar.model.AppSettings
 import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.model.SyncKind
+import app.olo.calendar.design.OloHue
+import app.olo.calendar.design.argb
 import app.olo.calendar.model.MemoryPreferences
 import app.olo.calendar.model.Preferences
 import app.olo.calendar.model.ViewMode
@@ -41,7 +43,9 @@ data class CalendarUiState(
     val month: YearMonth,
     val selected: LocalDate,
     val today: LocalDate,
+    /** Calendars as OLO shows them: a colour chosen in OLO replaces the stored one. */
     val calendars: List<CalendarInfo> = emptyList(),
+    val rawCalendars: List<CalendarInfo> = emptyList(),
     /** Every occurrence in the loaded range, hidden calendars included. */
     val allOccurrences: List<Occurrence> = emptyList(),
     /** What the views draw: [allOccurrences] of the calendars OLO shows. */
@@ -51,6 +55,8 @@ data class CalendarUiState(
     val loading: Boolean = true,
     val error: String? = null,
     val view: ViewMode = ViewMode.MONTH,
+    /** Agenda tab: false = 다가오는 일정 (from today), true = 지난 일정 (back from today). */
+    val agendaPast: Boolean = false,
     val settings: AppSettings = AppSettings(),
 ) {
     val calendarsById: Map<String, CalendarInfo> get() = calendars.associateBy { it.id }
@@ -135,7 +141,9 @@ class CalendarController(
         if (before.selected == day) return
         _state.update { it.copy(selected = day, month = YearMonth.of(day)) }
         val moved = when (before.view) {
-            ViewMode.MONTH, ViewMode.AGENDA -> YearMonth.of(day) != before.month
+            ViewMode.MONTH -> YearMonth.of(day) != before.month
+            // The agenda's range hangs from today, not from the selected day.
+            ViewMode.AGENDA -> false
             ViewMode.YEAR -> day.year != before.selected.year
             ViewMode.WEEK -> weekStartOf(day, before.settings.weekStart) != weekStartOf(before.selected, before.settings.weekStart)
             ViewMode.DAY -> true
@@ -163,6 +171,10 @@ class CalendarController(
     /** Back to OLO's defaults (everything but holiday copies). */
     fun showDefault() = updateSettings { it.copy(visibility = emptyMap()) }
 
+    /** A colour for a calendar inside OLO; null goes back to the calendar's own. */
+    fun setHue(id: String, hue: OloHue?) =
+        updateSettings { st -> st.copy(hues = if (hue == null) st.hues - id else st.hues + (id to hue.name)) }
+
     fun setFolded(key: String, folded: Boolean) = updateSettings { it.copy(folded = it.folded + (key to folded)) }
 
     fun goToday() {
@@ -182,7 +194,8 @@ class CalendarController(
             }.onSuccess { l ->
                 _state.update {
                     it.copy(
-                        calendars = l.calendars, allOccurrences = l.occurrences, sync = l.sync, eventCounts = l.counts,
+                        rawCalendars = l.calendars, calendars = recolored(l.calendars, it.settings),
+                        allOccurrences = l.occurrences, sync = l.sync, eventCounts = l.counts,
                         occurrences = shownOf(l.occurrences, l.calendars, it.settings),
                         loading = false, error = null, today = todayNow,
                     )
@@ -203,10 +216,15 @@ class CalendarController(
             monthGrid(s.month.plusMonths(1), s.settings.weekStart).last().plus(1, DateTimeUnit.DAY)
         ViewMode.WEEK -> weekStartOf(s.selected, s.settings.weekStart).let { it.plus(-7, DateTimeUnit.DAY) to it.plus(14, DateTimeUnit.DAY) }
         ViewMode.DAY -> s.selected.plus(-1, DateTimeUnit.DAY) to s.selected.plus(2, DateTimeUnit.DAY)
-        ViewMode.AGENDA -> {
-            val start = if (s.settings.hidePastInAgenda) s.today else s.month.firstDay
-            start to s.month.firstDay.plus(DatePeriod(months = 3))
-        }
+        ViewMode.AGENDA ->
+            if (s.agendaPast) s.today.plus(DatePeriod(years = -1)) to s.today
+            else s.today to s.today.plus(DatePeriod(years = 1))
+    }
+
+    fun setAgendaPast(past: Boolean) {
+        if (_state.value.agendaPast == past) return
+        _state.update { it.copy(agendaPast = past) }
+        reload()
     }
 
     fun setView(view: ViewMode) {
@@ -241,8 +259,12 @@ class CalendarController(
         if (next == before) return
         prefs.saveSettings(next)
         _state.update {
-            if (next.visibility == before.visibility) it.copy(settings = next)
-            else it.copy(settings = next, occurrences = shownOf(it.allOccurrences, it.calendars, next))
+            if (next.visibility == before.visibility && next.hues == before.hues) it.copy(settings = next)
+            else it.copy(
+                settings = next,
+                calendars = recolored(it.rawCalendars, next),
+                occurrences = shownOf(it.allOccurrences, it.calendars, next),
+            )
         }
         if (next.weekStart != before.weekStart || next.hidePastInAgenda != before.hidePastInAgenda) reload()
     }
@@ -293,6 +315,23 @@ class CalendarController(
         }
     }
 
+    /** Turns an account's calendar sync on (or back off, for undo) and reloads; [done] gets whether the OS took it. */
+    fun setAccountSync(account: String, on: Boolean, done: (Boolean) -> Unit = {}) {
+        scope.launch {
+            val ok = runCatching { store.setAccountSync(account, on) }.getOrDefault(false)
+            done(ok)
+            reload()
+        }
+    }
+
+    fun setMasterSync(on: Boolean, done: (Boolean) -> Unit = {}) {
+        scope.launch {
+            val ok = runCatching { store.setMasterSync(on) }.getOrDefault(false)
+            done(ok)
+            reload()
+        }
+    }
+
     fun syncNow() {
         store.requestSync()
         reload()
@@ -330,9 +369,18 @@ sealed interface SyncAction {
     data class Stranded(val calendar: CalendarInfo, val count: Int) : SyncAction
 }
 
+private fun AppSettings.hueOf(id: String): OloHue? = hues[id]?.let { n -> OloHue.entries.firstOrNull { it.name == n } }
+
+private fun recolored(calendars: List<CalendarInfo>, settings: AppSettings): List<CalendarInfo> =
+    if (settings.hues.isEmpty()) calendars
+    else calendars.map { c -> settings.hueOf(c.id)?.let { c.copy(colorArgb = it.argb) } ?: c }
+
+/** The occurrences OLO draws: hidden calendars out, OLO-chosen colours in. */
 private fun shownOf(all: List<Occurrence>, calendars: List<CalendarInfo>, settings: AppSettings): List<Occurrence> {
     val hidden = calendars.filter { !settings.isShown(it) }.map { it.id }.toSet()
-    return if (hidden.isEmpty()) all else all.filter { it.calendarId !in hidden }
+    val shown = if (hidden.isEmpty()) all else all.filter { it.calendarId !in hidden }
+    if (settings.hues.isEmpty()) return shown
+    return shown.map { o -> settings.hueOf(o.calendarId)?.let { o.copy(colorArgb = it.argb) } ?: o }
 }
 
 private class Loaded(

@@ -1,5 +1,22 @@
 package app.olo.calendar.ui
 
+import kotlinx.datetime.TimeZone
+import app.olo.calendar.design.OloIcons
+import app.olo.calendar.design.OloTone
+import app.olo.calendar.design.OloMotion
+import androidx.compose.animation.core.tween
+import androidx.compose.material3.Icon
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.layout.heightIn
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.foundation.ExperimentalFoundationApi
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.filter
@@ -79,12 +96,13 @@ import kotlinx.datetime.toLocalDateTime
 /** Twelve small months; days that hold events are tinted, as in Samsung's year view. */
 @Composable
 fun YearView(state: CalendarUiState, holidayCalendars: Set<String>, onOpen: (LocalDate) -> Unit, onYear: (Int) -> Unit) {
+    // Events per day: the year reads as a heat map in clay (docs/06 §4).
     val busy = remember(state.occurrences, holidayCalendars) {
-        buildSet {
+        buildMap<LocalDate, Int> {
             state.occurrences.filter { it.calendarId !in holidayCalendars }.forEach { o ->
                 var d = o.firstDay
                 var guard = 0
-                while (d <= o.lastDay && guard++ < 400) { add(d); d = d.plus(1, DateTimeUnit.DAY) }
+                while (d <= o.lastDay && guard++ < 400) { put(d, (get(d) ?: 0) + 1); d = d.plus(1, DateTimeUnit.DAY) }
             }
         }
     }
@@ -131,14 +149,18 @@ private const val YearSpan = 60
 private fun MiniMonth(
     month: YearMonth,
     state: CalendarUiState,
-    busy: Set<LocalDate>,
+    busy: Map<LocalDate, Int>,
     holidayCalendars: Set<String>,
     onOpen: (LocalDate) -> Unit,
     modifier: Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
     val current = YearMonth.of(state.today) == month
-    val tint = softFill(cs.primary)
+    val heat = listOf(
+        androidx.compose.ui.graphics.lerp(cs.surfaceContainerLowest, cs.primary, 0.14f),
+        androidx.compose.ui.graphics.lerp(cs.surfaceContainerLowest, cs.primary, 0.30f),
+        androidx.compose.ui.graphics.lerp(cs.surfaceContainerLowest, cs.primary, 0.62f),
+    )
     Column(modifier.clickable { onOpen(if (current) state.today else month.firstDay) }) {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text(
@@ -166,6 +188,8 @@ private fun MiniMonth(
                 week.forEach { d ->
                     val inMonth = d.monthNumber == month.month
                     val isToday = d == state.today
+                    val n = busy[d] ?: 0
+                    val level = when { n <= 0 -> -1; n == 1 -> 0; n <= 3 -> 1; else -> 2 }
                     val red = d.dayOfWeek == DayOfWeek.SUNDAY || holidayNames(d, state.occurrences, holidayCalendars).isNotEmpty()
                     Box(
                         Modifier.weight(1f).height(16.dp).padding(horizontal = 0.5.dp)
@@ -173,7 +197,7 @@ private fun MiniMonth(
                                 when {
                                     !inMonth -> Color.Transparent
                                     isToday -> cs.primary
-                                    d in busy -> tint
+                                    level >= 0 -> heat[level]
                                     else -> Color.Transparent
                                 },
                                 RoundedCornerShape(3.dp),
@@ -185,6 +209,7 @@ private fun MiniMonth(
                                 "${d.dayOfMonth}", fontSize = 9.sp,
                                 color = when {
                                     isToday -> cs.onPrimary
+                                    level == 2 -> cs.onPrimary
                                     red -> cs.error
                                     d.dayOfWeek == DayOfWeek.SATURDAY -> saturdayColor()
                                     else -> cs.onSurface
@@ -363,67 +388,149 @@ private fun TimeGridPage(
 // --- agenda -------------------------------------------------------------------
 
 /** Days that hold events, one after another, as Samsung's "일정" view lists them. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AgendaView(state: CalendarUiState, controller: CalendarController, holidayCalendars: Set<String>, onOpen: (Occurrence) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val zone = controller.zone
     val use24 = LocalUse24Hour.current
+    val past = state.agendaPast
     val events = state.occurrences.filter { it.calendarId !in holidayCalendars }
-    val days = remember(events) {
+    val days = remember(events, past, state.today) {
         events.flatMap { o ->
             buildList { var d = o.firstDay; var g = 0; while (d <= o.lastDay && g++ < 400) { add(d); d = d.plus(1, DateTimeUnit.DAY) } }
-        }.distinct().sorted().filter { !state.settings.hidePastInAgenda || it >= state.today }
+        }.distinct().filter { if (past) it < state.today else it >= state.today }
+            .let { if (past) it.sortedDescending() else it.sorted() }
+    }
+    // Month bands and day rows in one list; the rail jumps to a band.
+    val byMonth = remember(days) { days.groupBy { YearMonth.of(it) } }
+    val bandIndex = remember(byMonth) {
+        var i = 0
+        byMonth.map { (m, ds) -> (m to i).also { i += ds.size + 1 } }.toMap()
     }
     val list = rememberLazyListState()
-    LaunchedEffect(days, state.selected) {
-        val i = days.indexOfFirst { it >= state.selected }
-        if (i >= 0) list.scrollToItem(i)
-    }
-    if (days.isEmpty()) {
-        Text("이 기간에는 일정이 없습니다.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(24.dp))
-        return
-    }
-    LazyColumn(state = list, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 96.dp)) {
-        items(days, key = { it.toEpochDays() }) { d ->
-            val holidays = holidayNames(d, state.occurrences, holidayCalendars)
-            val red = d.dayOfWeek == DayOfWeek.SUNDAY || holidays.isNotEmpty()
-            Column(Modifier.fillMaxWidth().padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "${d.monthNumber}월 ${d.dayOfMonth}일 (${d.dayOfWeek.koShort()})",
-                        style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
-                        color = if (red) cs.error else if (d.dayOfWeek == DayOfWeek.SATURDAY) saturdayColor() else cs.onSurface,
-                        modifier = Modifier.then(if (d == state.today) Modifier.border(1.5.dp, cs.primary, MaterialTheme.shapes.extraSmall).padding(horizontal = 4.dp) else Modifier),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    val meta = listOfNotNull(KoreanLunar.fromSolar(d)?.takeIf { state.settings.showLunar }?.longLabel(), holidays.takeIf { it.isNotEmpty() }?.joinToString(" · "))
-                    Text(meta.joinToString("  ·  "), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+    val scope = rememberCoroutineScope()
+    Column(Modifier.fillMaxSize()) {
+        AgendaTabs(past, controller::setAgendaPast)
+        if (days.isEmpty()) {
+            Column(Modifier.fillMaxWidth().padding(top = 64.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.size(64.dp).background(OloTone.container, RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
+                    Icon(OloIcons.Agenda, contentDescription = null, tint = OloTone.accent, modifier = Modifier.size(30.dp))
                 }
-                events.on(d).sortedForDay().forEach { o ->
-                    val hue = calendarColor(o.colorArgb)
-                    if (o.allDay || o.firstDay != o.lastDay) {
-                        Row(
-                            Modifier.fillMaxWidth().background(softFill(hue), MaterialTheme.shapes.medium).clickable { onOpen(o) }.padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Tile(hue, 12.dp)
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(o.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodyLarge)
-                                val span = if (o.firstDay == o.lastDay) "하루 종일" else "${o.firstDay.monthNumber}월 ${o.firstDay.dayOfMonth}일 – ${o.lastDay.monthNumber}월 ${o.lastDay.dayOfMonth}일"
-                                Text(listOf(span, o.location).filter { it.isNotBlank() }.joinToString("  "), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-                            }
+                Text(
+                    if (past) "지난 1년 동안의 일정이 없습니다." else "앞으로 1년 동안 일정이 없습니다.",
+                    style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 14.dp),
+                )
+            }
+            return@Column
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(state = list, contentPadding = PaddingValues(bottom = 96.dp), modifier = Modifier.fillMaxSize()) {
+                byMonth.forEach { (m, ds) ->
+                    stickyHeader(key = "m${m.index}") { MonthBand(m) }
+                    items(ds, key = { it.toEpochDays() }) { d -> AgendaDay(d, state, events, holidayCalendars, zone, use24, onOpen) }
+                }
+            }
+            // The month rail, as Explorer's ㄱ–ㅎ index: tap a month to jump to it.
+            val current by remember(byMonth) {
+                derivedStateOf { bandIndex.entries.lastOrNull { it.value <= list.firstVisibleItemIndex }?.key }
+            }
+            Column(
+                Modifier.align(Alignment.CenterEnd).padding(end = 2.dp).width(30.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                byMonth.keys.take(12).forEach { m ->
+                    val on = m == current
+                    Text(
+                        "${m.month}", fontSize = 11.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                        color = if (on) OloTone.accent else cs.onSurfaceVariant.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().clickable { scope.launch { list.animateScrollToItem(bandIndex.getValue(m)) } }
+                            .padding(vertical = 7.dp)
+                            .semantics { contentDescription = "${m.year}년 ${m.month}월로 이동" },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgendaTabs(past: Boolean, onPast: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().background(OloTone.band).height(44.dp)) {
+        listOf(false to "다가오는 일정", true to "지난 일정").forEach { (p, label) ->
+            val on = p == past
+            val line by androidx.compose.animation.animateColorAsState(if (on) OloTone.solid else Color.Transparent, tween(OloMotion.Short))
+            Box(
+                Modifier.weight(1f).fillMaxHeight().clickable { onPast(p) }.drawBehind {
+                    drawRect(line, topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - 3.dp.toPx()), size = androidx.compose.ui.geometry.Size(size.width, 3.dp.toPx()))
+                }.semantics { selected = on; role = Role.Tab },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal, color = if (on) OloTone.accent else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MonthBand(m: YearMonth) {
+    val line = OloTone.bandLine
+    Box(
+        Modifier.fillMaxWidth().height(34.dp).background(OloTone.band).drawBehind {
+            drawLine(line, androidx.compose.ui.geometry.Offset(0f, size.height - 0.5f), androidx.compose.ui.geometry.Offset(size.width, size.height - 0.5f), 1.dp.toPx())
+        }.padding(horizontal = 16.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(m.koTitle(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = OloTone.accent)
+    }
+}
+
+@Composable
+private fun AgendaDay(
+    d: LocalDate,
+    state: CalendarUiState,
+    events: List<Occurrence>,
+    holidayCalendars: Set<String>,
+    zone: TimeZone,
+    use24: Boolean,
+    onOpen: (Occurrence) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val holidays = holidayNames(d, state.occurrences, holidayCalendars)
+    val red = d.dayOfWeek == DayOfWeek.SUNDAY || holidays.isNotEmpty()
+    val isToday = d == state.today
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 40.dp, top = 12.dp, bottom = 6.dp)) {
+        // The date tile: solid clay today, the soft fill otherwise.
+        Column(
+            Modifier.size(46.dp).background(if (isToday) OloTone.solid else OloTone.container, RoundedCornerShape(14.dp)),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            val dayColor = when { isToday -> OloTone.onSolid(OloTone.solid); red -> cs.error; d.dayOfWeek == DayOfWeek.SATURDAY -> saturdayColor(); else -> cs.onSurface }
+            Text(d.dayOfWeek.koShort(), fontSize = 10.sp, lineHeight = 11.sp, color = dayColor.copy(alpha = 0.85f))
+            Text("${d.dayOfMonth}", fontSize = 18.sp, lineHeight = 19.sp, fontWeight = FontWeight.Bold, color = dayColor)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            val meta = listOfNotNull(KoreanLunar.fromSolar(d)?.takeIf { state.settings.showLunar }?.longLabel(), holidays.takeIf { it.isNotEmpty() }?.joinToString(" · "))
+            if (meta.isNotEmpty()) Text(meta.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = if (holidays.isNotEmpty()) cs.error else OloTone.accent)
+            events.on(d).sortedForDay().forEach { o ->
+                val hue = calendarColor(o.colorArgb)
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 44.dp).clickable { onOpen(o) }.padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.width(4.dp).height(34.dp).background(hue, RoundedCornerShape(2.dp)))
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(o.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        val span = when {
+                            o.firstDay != o.lastDay -> "${o.firstDay.monthNumber}월 ${o.firstDay.dayOfMonth}일 – ${o.lastDay.monthNumber}월 ${o.lastDay.dayOfMonth}일"
+                            else -> timeLabel(o, zone, use24)
                         }
-                    } else {
-                        Row(Modifier.fillMaxWidth().clickable { onOpen(o) }.padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(clock(o.begin.toLocalDateTime(zone).time, use24), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false, modifier = Modifier.width(88.dp))
-                            Box(Modifier.width(3.dp).height(32.dp).background(hue, RoundedCornerShape(2.dp)))
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(o.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodyLarge)
-                                Text(listOf(timeLabel(o, zone, use24), o.location).filter { it.isNotBlank() }.joinToString("  "), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-                            }
-                        }
+                        Text(listOf(span, o.location).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

@@ -49,6 +49,7 @@ object OloIcons {
     val Warning by lazy { stroke("warning") { moveTo(12f, 4f); lineTo(21f, 20f); lineTo(3f, 20f); close(); line(12f, 10f, 12f, 14f); line(12f, 17f, 12f, 17.4f) } }
     val Plus by lazy { stroke("plus", width = 2f) { line(12f, 5f, 12f, 19f); line(5f, 12f, 19f, 12f) } }
     val ChevronDown by lazy { stroke("chevron", width = 1.8f) { moveTo(7f, 10f); lineTo(12f, 15f); lineTo(17f, 10f) } }
+    val ChevronRight by lazy { stroke("chevron-right", width = 1.9f) { moveTo(10f, 7f); lineTo(15f, 12f); lineTo(10f, 17f) } }
     val Back by lazy { stroke("back", width = 1.9f) { moveTo(15f, 5f); lineTo(8f, 12f); lineTo(15f, 19f) } }
 
     private fun stroke(name: String, width: Float = 1.8f, body: PathBuilder.() -> Unit) =

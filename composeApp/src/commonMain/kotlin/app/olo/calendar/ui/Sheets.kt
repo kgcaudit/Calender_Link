@@ -1,5 +1,6 @@
 package app.olo.calendar.ui
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -157,9 +158,11 @@ fun CalendarsSheet(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Column(Modifier.verticalScroll(rememberScrollState())) {
+        Box {
+          Column(Modifier.verticalScroll(rememberScrollState())) {
             CalendarTree(nav, horizontal = 0.dp)
-            nav.state.syncActions.forEach { ActionCard(it, nav.state, nav.onAction) }
+          }
+          NoteBar(nav, Modifier.align(Alignment.BottomCenter))
         }
     }
 }
@@ -350,7 +353,6 @@ fun SettingsSheet(state: CalendarUiState, onChange: ((AppSettings) -> AppSetting
             }
             SettingSwitch("한국 음력 표시", "일요일과 음력 1일·15일에 음력 날짜를 보여 줍니다.", st.showLunar) { v -> onChange { it.copy(showLunar = v) } }
             SettingSwitch("몇 번째 주인지 표시", "월 보기 왼쪽에 주 번호(ISO)를 보여 줍니다.", st.showWeekNumbers) { v -> onChange { it.copy(showWeekNumbers = v) } }
-            SettingSwitch("일정 목록에서 지난 날짜 숨기기", "일정 보기를 오늘부터 보여 줍니다.", st.hidePastInAgenda) { v -> onChange { it.copy(hidePastInAgenda = v) } }
             SettingSwitch("넓은 화면에서 달을 위아래로 넘기기", "폴드를 펼쳤을 때 월 보기를 위아래로 넘깁니다. 휴대폰 화면은 위아래 끌기가 달력 접기라서 항상 좌우로 넘깁니다.", st.verticalPagingWide) { v -> onChange { it.copy(verticalPagingWide = v) } }
 
             Text("새 일정", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)

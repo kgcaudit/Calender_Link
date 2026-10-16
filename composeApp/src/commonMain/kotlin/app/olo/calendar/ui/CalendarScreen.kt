@@ -1,6 +1,7 @@
 package app.olo.calendar.ui
 
 import app.olo.calendar.design.OloMotion
+import app.olo.calendar.design.OloTone
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideInVertically
@@ -112,6 +113,9 @@ fun CalendarScreen(
     var sheet by remember { mutableStateOf<Sheet>(Sheet.None) }
     var searchOpen by remember { mutableStateOf(startSearch != null) }
     var pickerOpen by remember { mutableStateOf(false) }
+    // "…동기화를 켰습니다 · 되돌리기" at the foot of the drawer / calendar sheet.
+    var syncNote by remember { mutableStateOf<SyncNote?>(null) }
+    LaunchedEffect(syncNote) { if (syncNote != null) { delay(5000); syncNote = null } }
     val holidayCalendars = state.calendars.filter { it.isHoliday }.map { it.id }.toSet()
     val stage = remember {
         AnchoredDraggableState(startStage ?: MonthStage.entries[(state.settings.monthStage - 1).coerceIn(0, 2)])
@@ -143,20 +147,12 @@ fun CalendarScreen(
         }
 
         val closeDrawer = { scope.launch { drawer.close() }; Unit }
-        val nav = NavActions(
-            state = state,
+        val nav = calendarNav(
+            state, controller, settings,
+            note = syncNote,
+            onNote = { syncNote = it },
+            onMove = { id -> sheet = Sheet.Move(id); closeDrawer() },
             onView = { v -> controller.setView(v); closeDrawer() },
-            onShown = controller::setShown,
-            onShowOnly = controller::showOnly,
-            onShowDefault = controller::showDefault,
-            onFold = controller::setFolded,
-            onAction = { a ->
-                when (a) {
-                    is SyncAction.Stranded -> sheet = Sheet.Move(a.calendar.id)
-                    else -> settings?.openSyncSettings() ?: run { sheet = Sheet.Sync }
-                }
-                closeDrawer()
-            },
             onCalendars = { sheet = Sheet.Calendars; closeDrawer() },
             onSyncNow = { controller.syncNow(); closeDrawer() },
             onSettings = { sheet = Sheet.Settings; closeDrawer() },
@@ -281,7 +277,11 @@ fun CalendarScreen(
             onDismiss = { sheet = Sheet.None },
         )
         Sheet.Calendars -> CalendarsSheet(
-            nav = calendarNav(state, controller, onAction = { a -> sheet = if (a is SyncAction.Stranded) Sheet.Move(a.calendar.id) else Sheet.Sync }),
+            nav = calendarNav(
+                state, controller, settings, note = syncNote, onNote = { syncNote = it },
+                onMove = { id -> sheet = Sheet.Move(id) }, onView = controller::setView,
+                onCalendars = {}, onSyncNow = controller::syncNow, onSettings = { sheet = Sheet.Settings },
+            ),
             onOpenSync = { sheet = Sheet.Sync },
             onDismiss = { sheet = Sheet.None },
         )
@@ -320,8 +320,9 @@ private fun TopBar(
     onSearch: () -> Unit,
     onToday: () -> Unit,
 ) {
+    // The top bar is a clay-tinted band, as Explorer marks its path bar (docs/06 §4 ②).
     Row(
-        Modifier.fillMaxWidth().height(OloLayout.TopBarHeight).padding(horizontal = 4.dp),
+        Modifier.fillMaxWidth().background(OloTone.band).height(OloLayout.TopBarHeight).padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onMenu != null) {
@@ -347,9 +348,7 @@ private fun TopBar(
                         (slideOutVertically(tween(OloMotion.Quick)) { h -> -dir * h / 2 } + fadeOut(tween(OloMotion.Quick)))
                 },
                 label = "title",
-            ) { (t, _) ->
-                Text(t, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
-            }
+            ) { (t, _) -> TitleText(t) }
             Icon(OloIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(18.dp).padding(start = 2.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (onArrows != null) {
@@ -365,10 +364,26 @@ private fun TopBar(
             Modifier.size(OloLayout.TouchTarget).clickable(onClick = onToday).semantics { contentDescription = "오늘로 이동" },
             contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.size(28.dp).border(1.6.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(7.dp)), contentAlignment = Alignment.Center) {
-                Text("${today.dayOfMonth}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            // A solid clay tile: the same mark today wears in the grid.
+            Box(Modifier.size(28.dp).background(OloTone.solid, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                Text("${today.dayOfMonth}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = OloTone.onSolid(OloTone.solid))
             }
         }
+    }
+}
+
+/** "2026 / 10월": the year as clay accent, the month in bold ink (docs/06 §4 ④). */
+@Composable
+private fun TitleText(title: String) {
+    val parts = Regex("^(\\d{4})년 (\\d{1,2})월$").find(title)?.groupValues
+    if (parts == null) {
+        Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        return
+    }
+    Row(verticalAlignment = Alignment.Bottom) {
+        Text(parts[1], style = MaterialTheme.typography.titleLarge, color = OloTone.accent, modifier = Modifier.padding(bottom = 1.dp))
+        Text(" / ", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(bottom = 2.dp))
+        Text("${parts[2]}월", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -580,16 +595,53 @@ private fun MonthPicker(current: YearMonth, today: LocalDate, onPick: (YearMonth
 }
 
 
-/** The calendar tree's actions for the wide screen's sheet (no drawer to close). */
-private fun calendarNav(state: CalendarUiState, controller: CalendarController, onAction: (SyncAction) -> Unit) = NavActions(
+internal class SyncNote(val text: String, val undo: (() -> Unit)?)
+
+/**
+ * The tree's actions. Sync is fixed in place (docs/06 §3): OLO turns the
+ * account's calendar sync on itself and offers undo; only when the phone
+ * refuses does it open the account settings.
+ */
+private fun calendarNav(
+    state: CalendarUiState,
+    controller: CalendarController,
+    settings: SystemSettings?,
+    note: SyncNote?,
+    onNote: (SyncNote?) -> Unit,
+    onMove: (String) -> Unit,
+    onView: (ViewMode) -> Unit,
+    onCalendars: () -> Unit,
+    onSyncNow: () -> Unit,
+    onSettings: () -> Unit,
+) = NavActions(
     state = state,
-    onView = controller::setView,
+    onView = onView,
     onShown = controller::setShown,
     onShowOnly = controller::showOnly,
     onShowDefault = controller::showDefault,
     onFold = controller::setFolded,
-    onAction = onAction,
-    onCalendars = {},
-    onSyncNow = controller::syncNow,
-    onSettings = {},
+    onEnableSync = { account ->
+        controller.setAccountSync(account, true) { ok ->
+            if (ok) {
+                onNote(SyncNote("$account 캘린더 동기화를 켰습니다") { controller.setAccountSync(account, false); onNote(null) })
+            } else {
+                onNote(SyncNote("휴대폰이 허용하지 않아 계정 설정을 엽니다", null))
+                settings?.openSyncSettings()
+            }
+        }
+    },
+    onEnableMaster = {
+        controller.setMasterSync(true) { ok ->
+            if (ok) onNote(SyncNote("휴대폰 자동 동기화를 켰습니다") { controller.setMasterSync(false); onNote(null) })
+            else settings?.openSyncSettings()
+        }
+    },
+    onAccountSettings = { settings?.openSyncSettings() },
+    onMove = onMove,
+    onHue = controller::setHue,
+    onCalendars = onCalendars,
+    onSyncNow = onSyncNow,
+    onSettings = onSettings,
+    note = note?.text,
+    onUndo = note?.undo,
 )
