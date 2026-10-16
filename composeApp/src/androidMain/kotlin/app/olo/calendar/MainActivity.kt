@@ -35,7 +35,7 @@ class MainActivity : ComponentActivity(), PermissionGate, SystemSettings {
         super.onCreate(savedInstanceState)
         refresh()
         val store = AndroidCalendarStore(this)
-        setContent { App(store, this, this) }
+        setContent { App(store, this, this, use24Hour = android.text.format.DateFormat.is24HourFormat(this)) }
     }
 
     override fun onResume() {

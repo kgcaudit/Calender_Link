@@ -44,10 +44,13 @@ class ScreenshotTest {
         render("month-light", dark = false, expanded = false)
         render("month-dark", dark = true, expanded = false)
         render("month-light-list", dark = false, expanded = true)
+        // Galaxy Z Fold unfolded, as in the user's screenshot (12-hour clock).
+        render("month-wide", dark = false, expanded = false, width = 2000, height = 1500, density = 2.2f)
     }
 
-    private fun render(name: String, dark: Boolean, expanded: Boolean) {
-        val scene = ImageComposeScene(width = 1080, height = 2340, density = Density(2.625f)) {
+    private fun render(name: String, dark: Boolean, expanded: Boolean, width: Int = 1080, height: Int = 2340, density: Float = 2.625f) {
+        val scene = ImageComposeScene(width = width, height = height, density = Density(density)) {
+          androidx.compose.runtime.CompositionLocalProvider(app.olo.calendar.ui.LocalUse24Hour provides false) {
             OloTheme(darkTheme = dark) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val scope = rememberCoroutineScope()
@@ -55,6 +58,7 @@ class ScreenshotTest {
                     CalendarScreen(c, startExpanded = expanded)
                 }
             }
+          }
         }
         var img = scene.render(0)
         for (i in 1..8) img = scene.render(i * 150_000_000L)

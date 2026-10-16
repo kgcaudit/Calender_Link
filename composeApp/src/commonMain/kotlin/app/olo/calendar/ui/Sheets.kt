@@ -82,9 +82,9 @@ fun EventDetailSheet(
         }
         Spacer(Modifier.height(12.dp))
         val when_ = if (occurrence.firstDay == occurrence.lastDay) {
-            "${occurrence.firstDay.koDate()} (${occurrence.firstDay.dayOfWeek.koShort()}) ${timeLabel(occurrence, controller.zone)}"
+            "${occurrence.firstDay.koDate()} (${occurrence.firstDay.dayOfWeek.koShort()}) ${timeLabel(occurrence, controller.zone, LocalUse24Hour.current)}"
         } else {
-            "${occurrence.firstDay.koDate()} – ${occurrence.lastDay.koDate()}" + if (occurrence.allDay) "" else " · ${timeLabel(occurrence, controller.zone)}"
+            "${occurrence.firstDay.koDate()} – ${occurrence.lastDay.koDate()}" + if (occurrence.allDay) "" else " · ${timeLabel(occurrence, controller.zone, LocalUse24Hour.current)}"
         }
         DetailLine("일시", when_)
         cal?.let { DetailLine("캘린더", "${it.name} · ${it.kind.koLabel()}") }

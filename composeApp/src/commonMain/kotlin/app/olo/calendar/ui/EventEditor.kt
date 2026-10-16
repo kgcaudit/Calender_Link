@@ -215,7 +215,7 @@ private fun DateTimeRow(
         OloOutlinedButton("${date.koDate()} (${date.dayOfWeek.koShort()})", onDate)
         if (!allDay) {
             Spacer(Modifier.width(8.dp))
-            OloOutlinedButton("${time.hour.toString().padStart(2, '0')}:${time.minute.toString().padStart(2, '0')}", onTime)
+            OloOutlinedButton(clock(time, LocalUse24Hour.current), onTime)
         }
     }
 }
@@ -307,7 +307,7 @@ private fun DateDialog(initial: LocalDate, onDismiss: () -> Unit, onPick: (Local
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TimeDialog(initial: LocalTime, onDismiss: () -> Unit, onPick: (LocalTime) -> Unit) {
-    val state = rememberTimePickerState(initialHour = initial.hour, initialMinute = initial.minute, is24Hour = true)
+    val state = rememberTimePickerState(initialHour = initial.hour, initialMinute = initial.minute, is24Hour = LocalUse24Hour.current)
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { OloTextButton("확인", { onPick(LocalTime(state.hour, state.minute)) }) },

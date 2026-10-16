@@ -36,8 +36,9 @@ interface SystemSettings {
 }
 
 @Composable
-fun App(store: CalendarStore, permissions: PermissionGate, settings: SystemSettings? = null) {
+fun App(store: CalendarStore, permissions: PermissionGate, settings: SystemSettings? = null, use24Hour: Boolean = true) {
     OloTheme {
+      androidx.compose.runtime.CompositionLocalProvider(LocalUse24Hour provides use24Hour) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             val granted by permissions.granted.collectAsState()
             if (granted) {
@@ -49,6 +50,7 @@ fun App(store: CalendarStore, permissions: PermissionGate, settings: SystemSetti
                 PermissionScreen(forGood, permissions::request, permissions::openSettings)
             }
         }
+      }
     }
 }
 

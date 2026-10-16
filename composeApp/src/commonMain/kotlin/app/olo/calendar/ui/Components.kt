@@ -47,7 +47,7 @@ fun OloTextButton(
         shape = MaterialTheme.shapes.small,
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         colors = if (color == Color.Unspecified) ButtonDefaults.textButtonColors() else ButtonDefaults.textButtonColors(contentColor = color),
-    ) { Text(text) }
+    ) { Text(text, maxLines = 1, softWrap = false) }
 }
 
 /** A rounded-square colour tile, the family's way of marking a kind. */

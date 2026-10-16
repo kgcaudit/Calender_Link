@@ -5,6 +5,9 @@ import kotlinx.datetime.LocalDate
 data class LunarDate(val year: Int, val month: Int, val day: Int, val leap: Boolean = false) {
     /** "9.1", or "윤2.1" in a leap month — the style Samsung Calendar uses. */
     fun label(): String = (if (leap) "윤" else "") + "$month.$day"
+
+    /** "음력 9월 6일" / "음력 윤2월 1일" for headers. */
+    fun longLabel(): String = "음력 " + (if (leap) "윤" else "") + "${month}월 ${day}일"
 }
 
 /**

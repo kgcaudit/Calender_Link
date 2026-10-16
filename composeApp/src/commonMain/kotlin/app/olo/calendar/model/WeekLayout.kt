@@ -28,7 +28,13 @@ data class WeekLayout(val segments: List<WeekSegment>, val hiddenPerDay: List<In
  *   take two lines;
  * - what does not fit in [maxLanes] is counted per day for a "+n".
  */
-fun layoutWeek(days: List<LocalDate>, items: List<Occurrence>, maxLanes: Int): WeekLayout {
+fun layoutWeek(
+    days: List<LocalDate>,
+    items: List<Occurrence>,
+    maxLanes: Int,
+    /** Whether a one-day item's title needs a second line at the current column width. */
+    needsTwoLines: (Occurrence) -> Boolean = { true },
+): WeekLayout {
     require(days.size == 7)
     val first = days.first()
     val last = days.last()
@@ -51,8 +57,8 @@ fun layoutWeek(days: List<LocalDate>, items: List<Occurrence>, maxLanes: Int): W
     // Roomy first: one-day items take two lanes from the start, so a long title
     // gets its second line even when other items follow. If that would hide
     // anything, fall back to packing one lane each and growing where free.
-    val roomy = place(ordered.map { Triple(it.o, it.s, it.e) }, first, last, lanes, twoLineSingles = true)
-    val result = if (roomy.second.all { it == 0 }) roomy else place(ordered.map { Triple(it.o, it.s, it.e) }, first, last, lanes, twoLineSingles = false)
+    val roomy = place(ordered.map { Triple(it.o, it.s, it.e) }, first, last, lanes, twoLineSingles = true, needsTwoLines)
+    val result = if (roomy.second.all { it == 0 }) roomy else place(ordered.map { Triple(it.o, it.s, it.e) }, first, last, lanes, twoLineSingles = false, needsTwoLines)
     return WeekLayout(result.first, result.second.toList())
 }
 
@@ -62,6 +68,7 @@ private fun place(
     last: LocalDate,
     lanes: Int,
     twoLineSingles: Boolean,
+    needsTwoLines: (Occurrence) -> Boolean,
 ): Pair<List<WeekSegment>, IntArray> {
     val grid = Array(lanes) { arrayOfNulls<WeekSegment>(7) }
     val hidden = IntArray(7)
@@ -69,7 +76,7 @@ private fun place(
     fun free(l: Int, s: Int, e: Int) = l < lanes && (s..e).all { c -> grid[l][c] == null }
     for ((o, s, e) in ordered) {
         val single = s == e && o.firstDay == o.lastDay
-        val tall = if (twoLineSingles && single) (0 until lanes).firstOrNull { l -> free(l, s, e) && free(l + 1, s, e) } else null
+        val tall = if (twoLineSingles && single && needsTwoLines(o)) (0 until lanes).firstOrNull { l -> free(l, s, e) && free(l + 1, s, e) } else null
         val lane = tall ?: (0 until lanes).firstOrNull { l -> free(l, s, e) }
         if (lane == null) {
             for (c in s..e) hidden[c]++
@@ -86,7 +93,7 @@ private fun place(
     // Packed: give one-day items a second line where the lane below is empty.
     val grown = placed.map { seg ->
         val below = seg.lane + 1
-        if (!seg.spansDays && below < lanes && grid[below][seg.startCol] == null) {
+        if (!seg.spansDays && needsTwoLines(seg.occurrence) && below < lanes && grid[below][seg.startCol] == null) {
             val g = seg.copy(height = 2)
             grid[below][seg.startCol] = g
             g
