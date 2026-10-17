@@ -97,6 +97,7 @@ private sealed interface Sheet {
     data object Calendars : Sheet
     data object Sync : Sheet
     data class Move(val fromCalendarId: String) : Sheet
+    data class Bridge(val samsungCalendarId: String) : Sheet
     data object Settings : Sheet
 }
 
@@ -108,9 +109,10 @@ fun CalendarScreen(
     startStage: MonthStage? = null,
     startDrawerOpen: Boolean = false,
     startSearch: String? = null,
+    startBridgeFor: String? = null,
 ) {
     val state by controller.state.collectAsState()
-    var sheet by remember { mutableStateOf<Sheet>(Sheet.None) }
+    var sheet by remember { mutableStateOf<Sheet>(startBridgeFor?.let { Sheet.Bridge(it) } ?: Sheet.None) }
     var searchOpen by remember { mutableStateOf(startSearch != null) }
     var pickerOpen by remember { mutableStateOf(false) }
     // "…동기화를 켰습니다 · 되돌리기" at the foot of the drawer / calendar sheet.
@@ -151,7 +153,7 @@ fun CalendarScreen(
             state, controller, settings,
             note = syncNote,
             onNote = { syncNote = it },
-            onMove = { id -> sheet = Sheet.Move(id); closeDrawer() },
+            onMove = { id -> sheet = moveOrBridge(state, id); closeDrawer() },
             onView = { v -> controller.setView(v); closeDrawer() },
             onCalendars = { sheet = Sheet.Calendars; closeDrawer() },
             onSyncNow = { controller.syncNow(); closeDrawer() },
@@ -279,7 +281,7 @@ fun CalendarScreen(
         Sheet.Calendars -> CalendarsSheet(
             nav = calendarNav(
                 state, controller, settings, note = syncNote, onNote = { syncNote = it },
-                onMove = { id -> sheet = Sheet.Move(id) }, onView = controller::setView,
+                onMove = { id -> sheet = moveOrBridge(state, id) }, onView = controller::setView,
                 onCalendars = {}, onSyncNow = controller::syncNow, onSettings = { sheet = Sheet.Settings },
             ),
             onOpenSync = { sheet = Sheet.Sync },
@@ -289,12 +291,20 @@ fun CalendarScreen(
             state = state,
             onSyncNow = controller::syncNow,
             onOpenSyncSettings = settings?.let { s2 -> { s2.openSyncSettings() } },
-            onMove = { sheet = Sheet.Move(it) },
+            onMove = { sheet = moveOrBridge(state, it) },
             onDismiss = { sheet = Sheet.None },
         )
         Sheet.Settings -> SettingsSheet(
             state = state,
             onChange = controller::updateSettings,
+            onDismiss = { sheet = Sheet.None },
+        )
+        is Sheet.Bridge -> BridgeSheet(
+            samsung = state.calendarsById[s.samsungCalendarId],
+            state = state,
+            controller = controller,
+            onEnableSync = { account -> controller.setAccountSync(account, true) { ok -> if (!ok) settings?.openSyncSettings() } },
+            onChanged = { on -> settings?.bridgeChanged(on) },
             onDismiss = { sheet = Sheet.None },
         )
         is Sheet.Move -> MoveSheet(
@@ -645,3 +655,7 @@ private fun calendarNav(
     note = note?.text,
     onUndo = note?.undo,
 )
+
+/** A Samsung-account calendar is joined to Google (the bridge); a phone-only one is moved. */
+private fun moveOrBridge(state: CalendarUiState, calendarId: String): Sheet =
+    if (state.calendarsById[calendarId]?.kind == app.olo.calendar.model.SyncKind.SAMSUNG) Sheet.Bridge(calendarId) else Sheet.Move(calendarId)

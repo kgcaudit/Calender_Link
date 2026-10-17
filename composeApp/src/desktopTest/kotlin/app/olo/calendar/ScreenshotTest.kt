@@ -54,6 +54,7 @@ class ScreenshotTest {
         // The whole drawer at once, down to the sync cards.
         render("month-drawer-tall", dark = false, drawer = true, height = 5200)
         render("month-drawer-dark", dark = true, drawer = true)
+        render("bridge-sheet", dark = false, bridge = "16")
         render("view-agenda-dark", dark = true, view = ViewMode.AGENDA)
         // Halfway through a swipe to November: the page follows the finger.
         render("month-swipe", dark = false, swipe = 0.45f)
@@ -67,7 +68,7 @@ class ScreenshotTest {
     }
 
     private fun render(
-        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
+        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
         view: ViewMode = ViewMode.MONTH,
     ) {
         val scene = ImageComposeScene(width = width, height = height, density = Density(density)) {
@@ -76,7 +77,7 @@ class ScreenshotTest {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val scope = rememberCoroutineScope()
                     val c = remember { CalendarController(SampleStore, scope, zone).also { it.setView(view) } }
-                    CalendarScreen(c, startStage = stage, startDrawerOpen = drawer, startSearch = search)
+                    CalendarScreen(c, startStage = stage, startDrawerOpen = drawer, startSearch = search, startBridgeFor = bridge)
                 }
             }
           }
@@ -162,6 +163,13 @@ private object SampleStore : CalendarStore {
     override suspend fun setVisible(calendarId: String, visible: Boolean) = Unit
     override suspend fun syncStatus() = SyncStatus(accountsWithSyncOff = listOf("kgcaudit02@gmail.com", "sutest@gmail.com"))
     override suspend fun setAccountSync(account: String, on: Boolean) = true
+    override suspend fun bridgeItems(calendarId: String): List<app.olo.calendar.model.BridgeItem> =
+        if (calendarId != "16") emptyList() else occ.map { o ->
+            app.olo.calendar.model.BridgeItem(o.eventId, app.olo.calendar.model.BridgeFields(o.title, "", "", o.allDay, o.begin.toEpochMilliseconds(), o.end.toEpochMilliseconds(), "Asia/Seoul", "", emptyList(), emptyList(), emptyList()))
+        }
+    override suspend fun bridgeCopy(sourceId: String, toCalendarId: String): String? = null
+    override suspend fun bridgeReplace(sourceId: String, targetId: String): String? = null
+    override suspend fun bridgeDelete(id: String) = false
     override suspend fun setMasterSync(on: Boolean) = true
     override fun requestSync() = Unit
     override fun changes(): Flow<Unit> = emptyFlow()

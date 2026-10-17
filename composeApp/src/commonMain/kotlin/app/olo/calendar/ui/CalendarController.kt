@@ -22,6 +22,10 @@ import app.olo.calendar.model.SyncStatus
 import app.olo.calendar.model.YearMonth
 import app.olo.calendar.model.monthGrid
 import app.olo.calendar.store.CalendarStore
+import app.olo.calendar.store.BridgeConfig
+import app.olo.calendar.store.BridgeEngine
+import app.olo.calendar.store.BridgeReport
+import app.olo.calendar.model.BridgePlan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -58,7 +62,15 @@ data class CalendarUiState(
     /** Agenda tab: false = 다가오는 일정 (from today), true = 지난 일정 (back from today). */
     val agendaPast: Boolean = false,
     val settings: AppSettings = AppSettings(),
+    /** Google-side ids of bridged pairs: shown once, from Samsung (docs/07). */
+    val bridgeLinkedGoogle: Set<String> = emptySet(),
+    val bridgeReport: BridgeReport? = null,
+    /** done / total while a bridge pass runs; null otherwise. */
+    val bridgeProgress: Pair<Int, Int>? = null,
 ) {
+    val bridgeSamsung: CalendarInfo? get() = settings.bridgeSamsungId?.let { calendarsById[it] }
+    val bridgeGoogle: CalendarInfo? get() = settings.bridgeGoogleId?.let { calendarsById[it] }
+
     val calendarsById: Map<String, CalendarInfo> get() = calendars.associateBy { it.id }
 
     /**
@@ -66,7 +78,7 @@ data class CalendarUiState(
      * iPhone. Exchange and iCloud travel by their own servers, so they are not listed.
      */
     val stranded: List<Pair<CalendarInfo, Int>>
-        get() = calendars.filter { it.writable && !it.isHoliday && (it.kind == SyncKind.DEVICE || it.kind == SyncKind.SAMSUNG) }
+        get() = calendars.filter { it.writable && !it.isHoliday && (it.kind == SyncKind.DEVICE || it.kind == SyncKind.SAMSUNG) && it.id != settings.bridgeSamsungId }
             .mapNotNull { c -> (eventCounts[c.id] ?: 0).takeIf { it > 0 }?.let { c to it } }
 
     val googleTargets: List<CalendarInfo>
@@ -113,12 +125,62 @@ class CalendarController(
     )
     val state: StateFlow<CalendarUiState> = _state.asStateFlow()
 
+    val bridge = BridgeEngine(store, prefs)
+
     init {
+        _state.update { it.copy(bridgeLinkedGoogle = bridge.linkedGoogleIds(), bridgeReport = bridge.lastReport) }
         reload()
         scope.launch {
             // A burst of writes (a sync pulling many events) reloads once.
             store.changes().debounce(300).collect { reload() }
         }
+        scope.launch {
+            // While OLO is open the bridge follows every change within seconds; the
+            // platform's background work covers the rest. Its own writes settle in one pass.
+            store.changes().debounce(3_000).collect { if (_state.value.settings.bridgeOn) runBridge() }
+        }
+        if (_state.value.settings.bridgeOn) runBridge()
+    }
+
+    private fun bridgeConfig(): BridgeConfig? = _state.value.settings.let { st ->
+        if (st.bridgeSamsungId != null && st.bridgeGoogleId != null) BridgeConfig(st.bridgeSamsungId, st.bridgeGoogleId) else null
+    }
+
+    /** What connecting these two calendars would do, without writing anything. */
+    suspend fun previewBridge(samsungId: String, googleId: String): BridgePlan = bridge.preview(BridgeConfig(samsungId, googleId))
+
+    /** Joins Samsung Calendar to the Google main calendar and runs the first pass. */
+    fun startBridge(samsungId: String, googleId: String, done: (Result<BridgeReport>) -> Unit = {}) {
+        if (_state.value.settings.bridgeSamsungId != samsungId || _state.value.settings.bridgeGoogleId != googleId) bridge.forget()
+        updateSettings { it.copy(bridgeSamsungId = samsungId, bridgeGoogleId = googleId) }
+        runBridge(done = done)
+    }
+
+    /** One pass now. [allowMassDelete] releases deletions held by the safety stop. */
+    fun runBridge(allowMassDelete: Boolean = false, done: (Result<BridgeReport>) -> Unit = {}) {
+        val config = bridgeConfig() ?: return
+        scope.launch {
+            val r = runCatching {
+                bridge.run(config, allowMassDelete) { d, t -> if (t > 0) _state.update { it.copy(bridgeProgress = d to t) } }
+            }
+            _state.update {
+                it.copy(
+                    bridgeProgress = null,
+                    bridgeLinkedGoogle = bridge.linkedGoogleIds(),
+                    bridgeReport = r.getOrNull() ?: it.bridgeReport,
+                    occurrences = shownOf(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
+                )
+            }
+            if (r.getOrNull()?.let { it.toGoogle + it.toSamsung + it.deleted > 0 } == true) store.requestSync()
+            done(r)
+        }
+    }
+
+    /** Stops the bridge; both calendars keep every event they hold. */
+    fun stopBridge() {
+        bridge.forget()
+        updateSettings { it.copy(bridgeSamsungId = null, bridgeGoogleId = null) }
+        _state.update { it.copy(bridgeLinkedGoogle = emptySet(), bridgeReport = null, occurrences = shownOf(it.allOccurrences, it.calendars, it.settings, emptySet())) }
     }
 
     /** A month page settled: keep the day number (31 → the month's last day), or today in today's month. */
@@ -196,7 +258,7 @@ class CalendarController(
                     it.copy(
                         rawCalendars = l.calendars, calendars = recolored(l.calendars, it.settings),
                         allOccurrences = l.occurrences, sync = l.sync, eventCounts = l.counts,
-                        occurrences = shownOf(l.occurrences, l.calendars, it.settings),
+                        occurrences = shownOf(l.occurrences, l.calendars, it.settings, it.bridgeLinkedGoogle),
                         loading = false, error = null, today = todayNow,
                     )
                 }
@@ -263,7 +325,7 @@ class CalendarController(
             else it.copy(
                 settings = next,
                 calendars = recolored(it.rawCalendars, next),
-                occurrences = shownOf(it.allOccurrences, it.calendars, next),
+                occurrences = shownOf(it.allOccurrences, it.calendars, next, it.bridgeLinkedGoogle),
             )
         }
         if (next.weekStart != before.weekStart || next.hidePastInAgenda != before.hidePastInAgenda) reload()
@@ -376,9 +438,12 @@ private fun recolored(calendars: List<CalendarInfo>, settings: AppSettings): Lis
     else calendars.map { c -> settings.hueOf(c.id)?.let { c.copy(colorArgb = it.argb) } ?: c }
 
 /** The occurrences OLO draws: hidden calendars out, OLO-chosen colours in. */
-private fun shownOf(all: List<Occurrence>, calendars: List<CalendarInfo>, settings: AppSettings): List<Occurrence> {
+private fun shownOf(all: List<Occurrence>, calendars: List<CalendarInfo>, settings: AppSettings, bridged: Set<String> = emptySet()): List<Occurrence> {
     val hidden = calendars.filter { !settings.isShown(it) }.map { it.id }.toSet()
-    val shown = if (hidden.isEmpty()) all else all.filter { it.calendarId !in hidden }
+    // A bridged pair is one event: show the Samsung copy, unless Samsung Calendar is hidden.
+    val samsungShown = settings.bridgeSamsungId?.let { id -> id !in hidden } == true
+    val twins = if (samsungShown) bridged else emptySet()
+    val shown = if (hidden.isEmpty() && twins.isEmpty()) all else all.filter { it.calendarId !in hidden && it.seriesId !in twins }
     if (settings.hues.isEmpty()) return shown
     return shown.map { o -> settings.hueOf(o.calendarId)?.let { o.copy(colorArgb = it.argb) } ?: o }
 }

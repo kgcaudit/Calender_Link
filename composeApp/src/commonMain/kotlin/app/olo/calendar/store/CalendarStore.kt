@@ -50,6 +50,23 @@ interface CalendarStore {
     /** The phone-wide auto-sync switch. */
     suspend fun setMasterSync(on: Boolean): Boolean
 
+    // --- the Galaxy bridge (docs/07) ---
+
+    /** Every series in a calendar (standalone events and repeating ones with their exceptions folded in). */
+    suspend fun bridgeItems(calendarId: String): List<app.olo.calendar.model.BridgeItem>
+
+    /** Copies a series into another calendar, exceptions and reminders included; returns the new id. */
+    suspend fun bridgeCopy(sourceId: String, toCalendarId: String): String?
+
+    /**
+     * Makes [targetId] match [sourceId]: in place for a plain event, by
+     * recreating the series when repeats are involved. Returns the target's id
+     * afterwards (new when recreated).
+     */
+    suspend fun bridgeReplace(sourceId: String, targetId: String): String?
+
+    suspend fun bridgeDelete(id: String): Boolean
+
     /** Asks the OS to sync now. The OS decides when it actually runs. */
     fun requestSync()
 

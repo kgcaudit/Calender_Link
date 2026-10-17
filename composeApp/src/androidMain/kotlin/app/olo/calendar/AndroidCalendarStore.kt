@@ -31,6 +31,10 @@ import app.olo.calendar.model.at
 import app.olo.calendar.model.classifyAndroidAccount
 import app.olo.calendar.model.isGoogleHolidayCalendarId
 import app.olo.calendar.model.looksLikeHolidayCalendar
+import app.olo.calendar.model.parseExdates
+import app.olo.calendar.model.BridgeException
+import app.olo.calendar.model.BridgeFields
+import app.olo.calendar.model.BridgeItem
 import app.olo.calendar.model.timedDays
 import app.olo.calendar.store.CalendarStore
 import kotlinx.coroutines.Dispatchers
@@ -132,6 +136,7 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
                 location = c.str(Instances.EVENT_LOCATION),
                 colorArgb = c.int(Instances.DISPLAY_COLOR),
                 recurring = c.str(Instances.RRULE).isNotBlank() || !c.isNull(c.getColumnIndexOrThrow(Instances.ORIGINAL_ID)),
+                seriesId = c.getColumnIndexOrThrow(Instances.ORIGINAL_ID).let { i -> if (c.isNull(i)) c.long(Instances.EVENT_ID).toString() else c.getLong(i).toString() },
             )
         }
     }
@@ -423,9 +428,12 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
     }
 
     /** Inserts a copy of [r] into [toCalendarId]; returns false if the provider refused it. */
-    private fun copyEvent(r: Map<String, Any?>, toCalendarId: String, keepRule: Boolean, excluded: List<Instant>): Boolean {
+    private fun copyEvent(r: Map<String, Any?>, toCalendarId: String, keepRule: Boolean, excluded: List<Instant>): Boolean =
+        copyEventId(r, toCalendarId, keepRule, excluded) != null
+
+    private fun copyEventId(r: Map<String, Any?>, toCalendarId: String, keepRule: Boolean, excluded: List<Instant>): Long? {
         val allDay = r[Events.ALL_DAY] == 1L
-        val start = r[Events.DTSTART] as Long? ?: return false
+        val start = r[Events.DTSTART] as Long? ?: return null
         val explicitEnd = r[Events.DTEND] as Long?
         val durMs = durationMillis(r[Events.DURATION] as String?)
         val end = explicitEnd ?: if (durMs > 0) start + durMs else start + if (allDay) 86_400_000L else 3_600_000L
@@ -455,9 +463,135 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
                 put(Events.DTEND, end)
             }
         }
-        val newId = runCatching { resolver.insert(Events.CONTENT_URI, v)?.let(ContentUris::parseId) }.getOrNull() ?: return false
+        val newId = runCatching { resolver.insert(Events.CONTENT_URI, v)?.let(ContentUris::parseId) }.getOrNull() ?: return null
         copyReminders(r.id(), newId)
-        return true
+        return newId
+    }
+
+    // --- the Galaxy bridge: Samsung Calendar ⇄ Google main (docs/07) ------------
+
+    override suspend fun bridgeItems(calendarId: String): List<BridgeItem> = io {
+        val rows = sourceRows(calendarId)
+        val exceptions = rows.filter { it.isException() }.groupBy { it[Events.ORIGINAL_ID].toString() }
+        val alarms = remindersOf(rows.map { it.id() })
+        rows.filterNot { it.isException() }.map { m ->
+            BridgeItem(m.id().toString(), fieldsOf(m, exceptions[m.id().toString()].orEmpty(), alarms[m.id()].orEmpty()))
+        }
+    }
+
+    private fun endOf(r: Map<String, Any?>): Long {
+        val start = r[Events.DTSTART] as Long? ?: 0L
+        val allDay = r[Events.ALL_DAY] == 1L
+        val dur = durationMillis(r[Events.DURATION] as String?)
+        return (r[Events.DTEND] as Long?) ?: if (dur > 0) start + dur else start + if (allDay) 86_400_000L else 3_600_000L
+    }
+
+    private fun fieldsOf(m: Map<String, Any?>, exceptions: List<Map<String, Any?>>, minutes: List<Int>) = BridgeFields(
+        title = m.s(Events.TITLE),
+        location = m.s(Events.EVENT_LOCATION),
+        description = m.s(Events.DESCRIPTION),
+        allDay = m[Events.ALL_DAY] == 1L,
+        startMillis = m[Events.DTSTART] as Long? ?: 0L,
+        endMillis = endOf(m),
+        timeZone = m.s(Events.EVENT_TIMEZONE),
+        rrule = m.s(Events.RRULE),
+        exdates = parseExdates(m[Events.EXDATE] as String?),
+        reminderMinutes = minutes,
+        exceptions = exceptions.mapNotNull { e ->
+            val orig = e[Events.ORIGINAL_INSTANCE_TIME] as Long? ?: return@mapNotNull null
+            if (e.isCancelled()) BridgeException(orig, cancelled = true)
+            else BridgeException(orig, false, e.s(Events.TITLE), e[Events.DTSTART] as Long? ?: 0L, endOf(e))
+        },
+    )
+
+    private fun remindersOf(ids: List<Long>): Map<Long, List<Int>> = buildMap<Long, MutableList<Int>> {
+        ids.chunked(400).forEach { chunk ->
+            resolver.query(
+                Reminders.CONTENT_URI, arrayOf(Reminders.EVENT_ID, Reminders.MINUTES),
+                "${Reminders.EVENT_ID} IN (${chunk.joinToString(",")})", null, null,
+            ).list { c -> c.long(Reminders.EVENT_ID) to c.int(Reminders.MINUTES) }
+                .forEach { (id, min) -> getOrPut(id) { mutableListOf() }.add(min) }
+        }
+    }
+
+    /** A series: its master row and the rows of its changed / cancelled occurrences. */
+    private fun seriesRows(id: Long): Pair<Map<String, Any?>, List<Map<String, Any?>>>? {
+        val master = resolver.query(
+            Events.CONTENT_URI, moveColumns + Events.CALENDAR_ID, "${Events._ID} = ? AND ${Events.DELETED} = 0", arrayOf(id.toString()), null,
+        ).list { c -> rowOf(c, moveColumns + Events.CALENDAR_ID) }.firstOrNull() ?: return null
+        val exceptions = resolver.query(
+            Events.CONTENT_URI, moveColumns, "${Events.ORIGINAL_ID} = ? AND ${Events.DELETED} = 0", arrayOf(id.toString()), null,
+        ).list { c -> rowOf(c, moveColumns) }
+        return master to exceptions
+    }
+
+    private fun rowOf(c: Cursor, cols: Array<String>): Map<String, Any?> = cols.associateWith { col ->
+        val i = c.getColumnIndexOrThrow(col)
+        when {
+            c.isNull(i) -> null
+            c.getType(i) == Cursor.FIELD_TYPE_INTEGER -> c.getLong(i)
+            else -> c.getString(i)
+        }
+    }
+
+    override suspend fun bridgeCopy(sourceId: String, toCalendarId: String): String? = io { copySeries(sourceId.toLong(), toCalendarId)?.toString() }
+
+    private fun copySeries(sourceId: Long, toCalendarId: String): Long? {
+        val (master, exceptions) = seriesRows(sourceId) ?: return null
+        val newId = copyEventId(master, toCalendarId, keepRule = true, excluded = emptyList()) ?: return null
+        // Changed and cancelled occurrences go in as real exceptions of the copy, so the
+        // other side sees one series (and never copies them back as loose events).
+        exceptions.forEach { e ->
+            val orig = e[Events.ORIGINAL_INSTANCE_TIME] as Long? ?: return@forEach
+            val v = ContentValues().apply {
+                put(Events.ORIGINAL_INSTANCE_TIME, orig)
+                if (e.isCancelled()) {
+                    put(Events.STATUS, Events.STATUS_CANCELED)
+                } else {
+                    put(Events.TITLE, e[Events.TITLE] as String?)
+                    put(Events.EVENT_LOCATION, e[Events.EVENT_LOCATION] as String?)
+                    put(Events.DESCRIPTION, e[Events.DESCRIPTION] as String?)
+                    put(Events.DTSTART, e[Events.DTSTART] as Long?)
+                    put(Events.DTEND, endOf(e))
+                    put(Events.ALL_DAY, if (e[Events.ALL_DAY] == 1L) 1 else 0)
+                }
+            }
+            runCatching { resolver.insert(ContentUris.withAppendedId(Events.CONTENT_EXCEPTION_URI, newId), v) }
+        }
+        return newId
+    }
+
+    override suspend fun bridgeReplace(sourceId: String, targetId: String): String? = io {
+        val (src, srcEx) = seriesRows(sourceId.toLong()) ?: return@io null
+        val (tgt, tgtEx) = seriesRows(targetId.toLong()) ?: return@io null
+        val plain = !src.repeats() && srcEx.isEmpty() && !tgt.repeats() && tgtEx.isEmpty()
+        if (plain) {
+            // A plain event: rewrite only what is shown, so the target keeps its own id
+            // (and Google keeps the iPhone's copy as the same event).
+            val allDay = src[Events.ALL_DAY] == 1L
+            val v = ContentValues().apply {
+                put(Events.TITLE, src[Events.TITLE] as String?)
+                put(Events.EVENT_LOCATION, src[Events.EVENT_LOCATION] as String?)
+                put(Events.DESCRIPTION, src[Events.DESCRIPTION] as String?)
+                put(Events.DTSTART, src[Events.DTSTART] as Long?)
+                put(Events.DTEND, endOf(src))
+                put(Events.ALL_DAY, if (allDay) 1 else 0)
+                put(Events.EVENT_TIMEZONE, if (allDay) "UTC" else (src[Events.EVENT_TIMEZONE] as String?) ?: zone.id)
+            }
+            resolver.update(ContentUris.withAppendedId(Events.CONTENT_URI, targetId.toLong()), v, null, null)
+            resolver.delete(Reminders.CONTENT_URI, "${Reminders.EVENT_ID} = ?", arrayOf(targetId))
+            copyReminders(sourceId.toLong(), targetId.toLong())
+            targetId
+        } else {
+            val cal = tgt[Events.CALENDAR_ID].toString()
+            val newId = copySeries(sourceId.toLong(), cal) ?: return@io null
+            resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, targetId.toLong()), null, null)
+            newId.toString()
+        }
+    }
+
+    override suspend fun bridgeDelete(id: String): Boolean = io {
+        runCatching { resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, id.toLong()), null, null) > 0 }.getOrDefault(false)
     }
 
     private fun copyReminders(fromEvent: Long, toEvent: Long) {

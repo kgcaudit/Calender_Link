@@ -35,6 +35,9 @@ interface PermissionGate {
 interface SystemSettings {
     /** The phone's account-sync settings, where Google calendar sync is switched on. */
     fun openSyncSettings()
+
+    /** The bridge was switched on or off: the platform (re)schedules its background passes. */
+    fun bridgeChanged(on: Boolean) {}
 }
 
 @Composable

@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import app.olo.calendar.model.loadSettings
 import app.olo.calendar.ui.App
 import app.olo.calendar.ui.PermissionGate
 import app.olo.calendar.ui.SystemSettings
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity(), PermissionGate, SystemSettings {
         refresh()
         val store = AndroidCalendarStore(this)
         val prefs = AndroidPreferences(this)
+        if (prefs.loadSettings().bridgeOn) BridgeScheduler.schedule(this)
         setContent { App(store, this, this, use24Hour = android.text.format.DateFormat.is24HourFormat(this), prefs = prefs) }
     }
 
@@ -55,6 +57,10 @@ class MainActivity : ComponentActivity(), PermissionGate, SystemSettings {
     override fun openSyncSettings() {
         runCatching { startActivity(Intent(Settings.ACTION_SYNC_SETTINGS)) }
             .onFailure { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+    }
+
+    override fun bridgeChanged(on: Boolean) {
+        if (on) BridgeScheduler.schedule(this) else BridgeScheduler.cancel(this)
     }
 
     override fun openSettings() {

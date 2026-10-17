@@ -55,6 +55,8 @@ data class Occurrence(
     val location: String,
     val colorArgb: Int,
     val recurring: Boolean,
+    /** The series this occurrence belongs to: the master's id for a changed occurrence, else [eventId]. */
+    val seriesId: String = eventId,
 )
 
 /** What the editor shows and saves. Times are wall-clock in [timeZoneId]. */

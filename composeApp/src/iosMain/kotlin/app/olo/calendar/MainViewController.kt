@@ -42,6 +42,10 @@ private object PendingIosStore : CalendarStore {
     override suspend fun setVisible(calendarId: String, visible: Boolean) = Unit
     override suspend fun syncStatus(): SyncStatus = SyncStatus()
     override suspend fun setAccountSync(account: String, on: Boolean) = false
+    override suspend fun bridgeItems(calendarId: String): List<app.olo.calendar.model.BridgeItem> = emptyList()
+    override suspend fun bridgeCopy(sourceId: String, toCalendarId: String): String? = null
+    override suspend fun bridgeReplace(sourceId: String, targetId: String): String? = null
+    override suspend fun bridgeDelete(id: String) = false
     override suspend fun setMasterSync(on: Boolean) = false
     override fun requestSync() = Unit
     override fun changes(): Flow<Unit> = emptyFlow()

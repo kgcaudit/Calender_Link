@@ -25,7 +25,12 @@ data class AppSettings(
     val verticalPagingWide: Boolean = false,
     /** Colours chosen inside OLO, calendar id → OloHue name; the store keeps its own colour (docs/06 §4). */
     val hues: Map<String, String> = emptyMap(),
-)
+    /** The Galaxy bridge (docs/07): Samsung Calendar ⇄ the Google main calendar. */
+    val bridgeSamsungId: String? = null,
+    val bridgeGoogleId: String? = null,
+) {
+    val bridgeOn: Boolean get() = bridgeSamsungId != null && bridgeGoogleId != null
+}
 
 fun AppSettings.isShown(c: CalendarInfo): Boolean = visibility[c.id] ?: c.shownByDefault()
 
@@ -55,6 +60,8 @@ fun Preferences.loadSettings(): AppSettings {
         folded = decodeVisibility(get("folded")),
         verticalPagingWide = get("verticalPagingWide")?.toBooleanStrictOrNull() ?: d.verticalPagingWide,
         hues = decodeMap(get("hues")),
+        bridgeSamsungId = get("bridgeSamsungId"),
+        bridgeGoogleId = get("bridgeGoogleId"),
     )
 }
 
@@ -70,4 +77,6 @@ fun Preferences.saveSettings(s: AppSettings) {
     put("folded", encodeVisibility(s.folded))
     put("verticalPagingWide", s.verticalPagingWide.toString())
     put("hues", encodeMap(s.hues))
+    put("bridgeSamsungId", s.bridgeSamsungId)
+    put("bridgeGoogleId", s.bridgeGoogleId)
 }

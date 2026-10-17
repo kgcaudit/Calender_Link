@@ -1,0 +1,222 @@
+package app.olo.calendar.model
+
+import kotlinx.datetime.atStartOfDayIn
+import kotlinx.datetime.toInstant
+
+/*
+ * The Galaxy bridge (docs/07): Samsung Calendar ⇄ the Google main calendar,
+ * both ways, originals kept. Samsung Calendar stays the home of the Galaxy
+ * ecosystem (phone, tab, book); the Google main calendar carries the same
+ * events to the iPhone.
+ *
+ * Unit of work: a "series" — a standalone event, or a repeating event with its
+ * changed and cancelled occurrences folded in. Each side's series is reduced to
+ * a fingerprint of what a person sees (title, times, rule, exclusions,
+ * reminders, place, notes). Equal fingerprints mean the pair agrees, whatever
+ * bookkeeping the sync adapters add, so the bridge's own writes never echo.
+ */
+
+/** A series' content, normalised so both providers yield the same value for the same event. */
+data class BridgeFields(
+    val title: String,
+    val location: String,
+    val description: String,
+    val allDay: Boolean,
+    val startMillis: Long,
+    val endMillis: Long,
+    /** Wall-clock zone of a timed event; ignored for all-day events. */
+    val timeZone: String,
+    val rrule: String,
+    /** Excluded occurrence starts, epoch millis. */
+    val exdates: List<Long>,
+    val reminderMinutes: List<Int>,
+    /** Changed occurrences: original start → their own content (cancelled ones as [BridgeException.cancelled]). */
+    val exceptions: List<BridgeException>,
+)
+
+data class BridgeException(
+    val originalStart: Long,
+    val cancelled: Boolean,
+    val title: String = "",
+    val startMillis: Long = 0,
+    val endMillis: Long = 0,
+)
+
+/** One series as the bridge sees it. */
+data class BridgeItem(val id: String, val fields: BridgeFields) {
+    val fingerprint: String = bridgeFingerprint(fields)
+
+    /** What a person would call "the same event" when two calendars already hold copies. */
+    val matchKey: String = "${fields.title.trim().lowercase()}|${fields.allDay}|${fields.startMillis}"
+}
+
+fun normaliseRrule(rule: String): String =
+    rule.trim().removePrefix("RRULE:").uppercase().split(';').map { it.trim() }.filter { it.isNotEmpty() }
+        // WKST=MO is the default; Google adds it, Samsung does not.
+        .filterNot { it == "WKST=MO" }
+        .sorted().joinToString(";")
+
+fun bridgeFingerprint(f: BridgeFields): String {
+    val text = buildString {
+        append(f.title.trim()).append('\u0001')
+        append(f.location.trim()).append('\u0001')
+        append(f.description.trim().replace("\r\n", "\n")).append('\u0001')
+        append(f.allDay).append('\u0001')
+        append(f.startMillis).append('\u0001')
+        append(f.endMillis).append('\u0001')
+        append(if (f.allDay) "" else f.timeZone).append('\u0001')
+        append(normaliseRrule(f.rrule)).append('\u0001')
+        append(f.exdates.distinct().sorted().joinToString(",")).append('\u0001')
+        append(f.reminderMinutes.distinct().sorted().joinToString(",")).append('\u0001')
+        f.exceptions.sortedBy { it.originalStart }.forEach { e ->
+            append(e.originalStart).append(if (e.cancelled) "x" else "~${e.title.trim()}@${e.startMillis}-${e.endMillis}").append(';')
+        }
+    }
+    return fnv64(text)
+}
+
+/** FNV-1a 64-bit over UTF-16 code units, as hex: stable on every platform. */
+fun fnv64(s: String): String {
+    var h = -0x340d631b7bdddcdbL // 0xcbf29ce484222325
+    for (c in s) {
+        h = h xor c.code.toLong()
+        h *= 0x100000001b3L
+    }
+    return h.toULong().toString(16)
+}
+
+/** A pair the bridge keeps in step, with each side's fingerprint when they last agreed. */
+data class BridgeLink(val samsungId: String, val googleId: String, val samsungPrint: String, val googlePrint: String)
+
+fun encodeLinks(links: List<BridgeLink>): String =
+    links.joinToString(";") { "${it.samsungId},${it.googleId},${it.samsungPrint},${it.googlePrint}" }
+
+fun decodeLinks(s: String?): List<BridgeLink> =
+    s.orEmpty().split(';').mapNotNull { part ->
+        val p = part.split(',')
+        if (p.size != 4 || p[0].isEmpty() || p[1].isEmpty()) null else BridgeLink(p[0], p[1], p[2], p[3])
+    }
+
+sealed interface BridgeOp {
+    data class CreateInGoogle(val samsungId: String) : BridgeOp
+    data class CreateInSamsung(val googleId: String) : BridgeOp
+    /** Copy the source series over its partner. */
+    data class UpdateGoogle(val samsungId: String, val googleId: String) : BridgeOp
+    data class UpdateSamsung(val googleId: String, val samsungId: String) : BridgeOp
+    data class DeleteGoogle(val googleId: String, val samsungId: String) : BridgeOp
+    data class DeleteSamsung(val samsungId: String, val googleId: String) : BridgeOp
+    /** Already equal: only the link's fingerprints move (or a new pair is recorded). */
+    data class Agree(val samsungId: String, val googleId: String) : BridgeOp
+}
+
+data class BridgePlan(
+    val ops: List<BridgeOp>,
+    /** Both sides changed since they last agreed; Samsung's version wins (docs/07 §2). */
+    val conflicts: Int,
+    /** Deletions held back by the safety stop, waiting for the person to confirm. */
+    val heldDeletes: Int,
+    /** Links whose both sides are gone: dropped. */
+    val dropped: List<BridgeLink>,
+) {
+    fun count(kind: (BridgeOp) -> Boolean) = ops.count(kind)
+    val toGoogle get() = count { it is BridgeOp.CreateInGoogle || it is BridgeOp.UpdateGoogle }
+    val toSamsung get() = count { it is BridgeOp.CreateInSamsung || it is BridgeOp.UpdateSamsung }
+    val deletes get() = count { it is BridgeOp.DeleteGoogle || it is BridgeOp.DeleteSamsung }
+    val paired get() = count { it is BridgeOp.Agree }
+    val writes get() = ops.size - paired
+}
+
+/** Deleting more than this many series in one pass needs a person's yes (a cleared calendar, a lost account). */
+fun massDeleteLimit(linked: Int): Int = maxOf(5, linked / 5)
+
+/**
+ * What one pass of the bridge does. Pure: the engine reads both calendars,
+ * calls this, then carries the ops out.
+ */
+fun planBridge(
+    samsung: List<BridgeItem>,
+    google: List<BridgeItem>,
+    links: List<BridgeLink>,
+    allowMassDelete: Boolean = false,
+): BridgePlan {
+    val s = samsung.associateBy { it.id }
+    val g = google.associateBy { it.id }
+    val ops = mutableListOf<BridgeOp>()
+    val deletes = mutableListOf<BridgeOp>()
+    val dropped = mutableListOf<BridgeLink>()
+    var conflicts = 0
+    val linkedS = HashSet<String>()
+    val linkedG = HashSet<String>()
+
+    for (l in links) {
+        val si = s[l.samsungId]
+        val gi = g[l.googleId]
+        if (si != null) linkedS += si.id
+        if (gi != null) linkedG += gi.id
+        when {
+            si == null && gi == null -> dropped += l
+            si == null -> deletes += BridgeOp.DeleteGoogle(l.googleId, l.samsungId)
+            gi == null -> deletes += BridgeOp.DeleteSamsung(l.samsungId, l.googleId)
+            si.fingerprint == gi.fingerprint -> {
+                if (si.fingerprint != l.samsungPrint || gi.fingerprint != l.googlePrint) ops += BridgeOp.Agree(si.id, gi.id)
+            }
+            else -> {
+                val sChanged = si.fingerprint != l.samsungPrint
+                val gChanged = gi.fingerprint != l.googlePrint
+                if (sChanged && gChanged) conflicts++
+                ops += if (gChanged && !sChanged) BridgeOp.UpdateSamsung(gi.id, si.id) else BridgeOp.UpdateGoogle(si.id, gi.id)
+            }
+        }
+    }
+
+    // Unpaired series: pair equal-looking copies first (no duplicates on the first run), then copy the rest.
+    val freeG = google.filter { it.id !in linkedG }.groupBy { it.matchKey }.mapValues { it.value.toMutableList() }
+    val usedG = HashSet<String>()
+    for (si in samsung) {
+        if (si.id in linkedS) continue
+        val gi = freeG[si.matchKey]?.removeFirstOrNull()
+        if (gi != null) {
+            usedG += gi.id
+            ops += if (gi.fingerprint == si.fingerprint) BridgeOp.Agree(si.id, gi.id) else BridgeOp.UpdateGoogle(si.id, gi.id)
+        } else {
+            ops += BridgeOp.CreateInGoogle(si.id)
+        }
+    }
+    for (gi in google) {
+        if (gi.id in linkedG || gi.id in usedG) continue
+        ops += BridgeOp.CreateInSamsung(gi.id)
+    }
+
+    val held = if (!allowMassDelete && deletes.size > massDeleteLimit(links.size)) deletes.size else 0
+    if (held == 0) ops += deletes
+    return BridgePlan(ops, conflicts, held, dropped)
+}
+
+/**
+ * EXDATE as Android stores it ("20261020T010000Z,…", "TZID=Asia/Seoul;20261020T100000",
+ * or all-day "20261020") → epoch millis.
+ */
+fun parseExdates(raw: String?): List<Long> {
+    val s = raw?.trim().orEmpty()
+    if (s.isEmpty()) return emptyList()
+    var zone: kotlinx.datetime.TimeZone = kotlinx.datetime.TimeZone.UTC
+    val body = s.substringAfter(';', s).let { b ->
+        val head = s.substringBefore(';', "")
+        if (head.startsWith("TZID=")) runCatching { zone = kotlinx.datetime.TimeZone.of(head.removePrefix("TZID=")) }
+        if (head.isEmpty() || head.contains(',')) s else b
+    }
+    return body.split(',').mapNotNull { v -> parseIcalTime(v.trim(), zone) }
+}
+
+private fun parseIcalTime(v: String, zone: kotlinx.datetime.TimeZone): Long? = runCatching {
+    val y = v.substring(0, 4).toInt()
+    val mo = v.substring(4, 6).toInt()
+    val d = v.substring(6, 8).toInt()
+    if (v.length < 15) {
+        kotlinx.datetime.LocalDate(y, mo, d).atStartOfDayIn(kotlinx.datetime.TimeZone.UTC).toEpochMilliseconds()
+    } else {
+        val ldt = kotlinx.datetime.LocalDateTime(y, mo, d, v.substring(9, 11).toInt(), v.substring(11, 13).toInt(), v.substring(13, 15).toInt())
+        val z = if (v.endsWith("Z")) kotlinx.datetime.TimeZone.UTC else zone
+        ldt.toInstant(z).toEpochMilliseconds()
+    }
+}.getOrNull()

@@ -344,10 +344,13 @@ private fun AccountCard(account: AccountGroup, nav: NavActions, shown: (String) 
             // One calendar: the card is the calendar's own line.
             val c = account.calendars.single()
             val n = counts[c.id] ?: 0
+            val bridgedNow = c.id == nav.state.settings.bridgeSamsungId
             val sub = listOfNotNull(
-                account.subtitle,
-                account.title.takeIf { it != c.name },
+                account.subtitle.takeIf { !bridgedNow },
+                account.title.takeIf { it != c.name && !bridgedNow },
                 n.takeIf { it > 0 }?.let { "일정 $it" },
+                nav.state.bridgeReport?.takeIf { bridgedNow }?.let { "맞춤 ${agoKo(it.atMillis)}" },
+                nav.state.bridgeProgress?.takeIf { bridgedNow }?.let { (d, t) -> "맞추는 중 $d/$t" },
             ).joinToString(" · ")
             CalendarLine(c, nav, shown(c.id), title = c.name, subtitle = sub, status = { SyncChip(account, nav) }, trailing = {}, lead = 6.dp)
         } else {
@@ -428,9 +431,18 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
             }
         }
         AccountStatus.DEVICE_ONLY -> {
-            val strandedId = account.calendars.firstOrNull { c -> nav.state.stranded.any { it.first.id == c.id } }?.id
-            Chip("이 기기만", cs.onSurfaceVariant, cs.surfaceContainerHighest, if (strandedId != null) OloIcons.ChevronRight else null,
-                onClick = strandedId?.let { id -> { nav.onMove(id) } })
+            val bridged = account.calendars.firstOrNull { it.id == nav.state.settings.bridgeSamsungId }
+            val samsung = account.calendars.firstOrNull { it.kind == SyncKind.SAMSUNG && it.writable }
+            when {
+                // Joined to the Google main calendar (docs/07): green, like a syncing account.
+                bridged != null -> Chip("구글 메인 연결", if (dark) Color(0xFF8FD1AE) else Color(0xFF2F6B4F), Color.Transparent, OloIcons.ChevronRight) { nav.onMove(bridged.id) }
+                samsung != null -> Chip("구글 메인과 연결", cs.onPrimaryContainer, OloTone.container, OloIcons.ChevronRight) { nav.onMove(samsung.id) }
+                else -> {
+                    val strandedId = account.calendars.firstOrNull { c -> nav.state.stranded.any { it.first.id == c.id } }?.id
+                    Chip("이 기기만", cs.onSurfaceVariant, cs.surfaceContainerHighest, if (strandedId != null) OloIcons.ChevronRight else null,
+                        onClick = strandedId?.let { id -> { nav.onMove(id) } })
+                }
+            }
         }
         AccountStatus.READ_ONLY -> Text("읽기 전용 · ", fontSize = 10.sp, color = cs.onSurfaceVariant)
     }
