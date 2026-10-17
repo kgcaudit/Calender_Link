@@ -110,6 +110,16 @@ class CalendarGroupsTest {
     }
 
     @Test
+    fun withTheBridgeTheMainPairLeavesTheTreeAndTheRestIsOther() {
+        // Samsung Calendar (16) ⇄ sutest (6), plus sutest's 가족 (7), drawn as the main section.
+        val t = buildCalendarTree(cals, counts, emptyList(), mainSection = setOf("16", "6", "7"))
+        assertTrue(t.none { it.category == CalendarCategory.MINE })
+        val other = t.first { it.category == CalendarCategory.OTHER }.calendars.map { it.id }.toSet()
+        assertEquals(setOf("1", "4", "10"), other)
+        assertTrue(t.flatMap { it.calendars }.none { it.id in setOf("16", "6", "7") })
+    }
+
+    @Test
     fun triStates() {
         assertEquals(TriState.ALL, triState(listOf("a", "b")) { true })
         assertEquals(TriState.SOME, triState(listOf("a", "b")) { it == "a" })

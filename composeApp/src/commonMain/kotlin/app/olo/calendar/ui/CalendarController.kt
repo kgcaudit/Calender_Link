@@ -89,12 +89,18 @@ data class CalendarUiState(
     val syncActions: List<SyncAction>
         get() = buildList {
             if (!sync.masterSyncOn) add(SyncAction.MasterSyncOff)
-            sync.accountsWithSyncOff.forEach { add(SyncAction.AccountSyncOff(it)) }
-            sync.accountsNeedingAccess.forEach { add(SyncAction.AccountSyncOff(it)) }
+            // Only the account that carries events to the iPhone matters: the Google main
+            // account when the bridge is on, else any Google account switched off.
+            val main = bridgeGoogle?.accountName
+            if (main != null) {
+                if (main in sync.accountsWithSyncOff || main in sync.accountsNeedingAccess) add(SyncAction.AccountSyncOff(main))
+            } else {
+                sync.accountsWithSyncOff.forEach { add(SyncAction.AccountSyncOff(it)) }
+            }
             stranded.forEach { (c, n) -> add(SyncAction.Stranded(c, n)) }
         }
 
-    val needsSyncAttention: Boolean get() = syncActions.isNotEmpty()
+    val needsSyncAttention: Boolean get() = syncActions.isNotEmpty() || (bridgeReport?.heldDeletes ?: 0) > 0
 
     fun isShown(c: CalendarInfo): Boolean = settings.isShown(c)
 

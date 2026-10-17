@@ -9,6 +9,8 @@ package app.olo.calendar.model
 /** Top level: what a calendar is for, not where it comes from. */
 enum class CalendarCategory(val label: String) {
     MINE("내 캘린더"),
+    /** With the bridge on: personal calendars outside the main pair (docs/07 §9). */
+    OTHER("다른 캘린더"),
     WORK("업무"),
     HOLIDAYS("공휴일·기념일"),
     SUBSCRIBED("구독"),
@@ -115,12 +117,21 @@ fun buildCalendarTree(
     counts: Map<String, Int>,
     accountsWithSyncOff: Collection<String>,
     needsAccess: Collection<String> = emptyList(),
+    /**
+     * With the bridge on: the main section (the joined pair and the rest of the
+     * Google main account) is drawn on its own above the tree, so those
+     * calendars leave it, and other personal calendars become "다른 캘린더".
+     */
+    mainSection: Set<String> = emptySet(),
 ): List<CategoryGroup> {
     val n = { c: CalendarInfo -> counts[c.id] ?: 0 }
     val calendarOrder = compareBy<CalendarInfo>(
         { !it.writable && n(it) == 0 }, { !it.isPrimary }, { -n(it) }, { it.name.lowercase() },
     )
-    return calendars.groupBy { it.category() }.toSortedMap(compareBy { it.ordinal }).map { (cat, inCat) ->
+    val bridged = mainSection.isNotEmpty()
+    return calendars.filter { it.id !in mainSection }
+        .groupBy { c -> c.category().let { if (bridged && it == CalendarCategory.MINE) CalendarCategory.OTHER else it } }
+        .toSortedMap(compareBy { it.ordinal }).map { (cat, inCat) ->
         val accounts = inCat.groupBy { it.accountType to it.accountName }.map { (k, cals) ->
             val sorted = cals.sortedWith(calendarOrder)
             AccountGroup(

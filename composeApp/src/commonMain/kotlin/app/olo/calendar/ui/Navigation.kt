@@ -216,7 +216,8 @@ private fun TriState.toggleable(): ToggleableState = when (this) {
 }
 
 /** Categories that start folded: things people rarely switch (docs/05 §3.3). */
-private fun CalendarCategory.foldedByDefault() = this == CalendarCategory.HOLIDAYS || this == CalendarCategory.SUBSCRIBED
+private fun CalendarCategory.foldedByDefault() =
+    this == CalendarCategory.HOLIDAYS || this == CalendarCategory.SUBSCRIBED || this == CalendarCategory.OTHER
 
 /**
  * Category → account → calendar (docs/06 §2, plan A): a category is a tinted
@@ -227,7 +228,16 @@ private fun CalendarCategory.foldedByDefault() = this == CalendarCategory.HOLIDA
 @Composable
 fun CalendarTree(nav: NavActions, horizontal: androidx.compose.ui.unit.Dp = 10.dp) {
     val s = nav.state
-    val tree = remember(s.calendars, s.eventCounts, s.sync) { buildCalendarTree(s.calendars, s.eventCounts, s.sync.accountsWithSyncOff, s.sync.accountsNeedingAccess) }
+    val samsung = s.bridgeSamsung
+    val google = s.bridgeGoogle
+    // The main section: the joined pair and the rest of the Google main account (e.g. 가족).
+    val mainRest = if (samsung != null && google != null) {
+        s.calendars.filter { it.accountName == google.accountName && it.accountType == google.accountType && it.id != google.id && !it.isHoliday && it.writable }
+    } else emptyList()
+    val mainIds = if (samsung != null && google != null) setOf(samsung.id, google.id) + mainRest.map { it.id } else emptySet()
+    val tree = remember(s.calendars, s.eventCounts, s.sync, mainIds) {
+        buildCalendarTree(s.calendars, s.eventCounts, s.sync.accountsWithSyncOff, s.sync.accountsNeedingAccess, mainIds)
+    }
     val shown = { id: String -> s.calendarsById[id]?.let(s::isShown) ?: false }
     val allIds = s.calendars.map { it.id }
     Column(Modifier.padding(horizontal = horizontal)) {
@@ -241,7 +251,77 @@ fun CalendarTree(nav: NavActions, horizontal: androidx.compose.ui.unit.Dp = 10.d
             Text("전체 캘린더", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Count(allIds.count(shown), allIds.size)
         }
+        if (samsung != null && google != null) MainSection(samsung, google, mainRest, nav, shown)
         tree.forEach { group -> CategorySection(group, nav, shown) }
+    }
+}
+
+/**
+ * The joined pair as one calendar (docs/07 §9): Samsung Calendar ⇄ the Google main
+ * calendar hold the same events, so one box shows or hides both, and the line
+ * opens the bridge sheet. The main account's other calendars hang below it.
+ */
+@Composable
+private fun MainSection(samsung: CalendarInfo, google: CalendarInfo, rest: List<CalendarInfo>, nav: NavActions, shown: (String) -> Boolean) {
+    val cs = MaterialTheme.colorScheme
+    val s = nav.state
+    val ids = listOf(samsung.id, google.id)
+    val on = shown(samsung.id) || shown(google.id)
+    val n = s.eventCounts[samsung.id] ?: 0
+    val issue = google.accountName in s.sync.accountsWithSyncOff || google.accountName in s.sync.accountsNeedingAccess ||
+        (s.bridgeReport?.heldDeletes ?: 0) > 0
+    val green = if (cs.background.luminanceIsDarkPublic()) Color(0xFF8FD1AE) else Color(0xFF2F6B4F)
+    Text(
+        "메인 캘린더", style = MaterialTheme.typography.labelLarge, color = OloTone.accent,
+        modifier = Modifier.padding(start = 8.dp, top = 10.dp, bottom = 6.dp),
+    )
+    Surface(
+        color = cs.surfaceContainerLowest,
+        shape = MaterialTheme.shapes.medium,
+        border = androidx.compose.foundation.BorderStroke(1.dp, OloTone.bandLine),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column {
+            Row(
+                Modifier.fillMaxWidth().clickable { nav.onMove(samsung.id) }.padding(start = 4.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.Checkbox(
+                    checked = on, onCheckedChange = { nav.onShown(ids, it) },
+                    colors = CheckboxDefaults.colors(checkedColor = calendarColor(samsung.colorArgb)),
+                )
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(samsung.name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        Text(" ⇄ ", style = MaterialTheme.typography.labelLarge, color = OloTone.accent)
+                    }
+                    Text(google.accountName, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                        val (label, color) = when {
+                            s.bridgeProgress != null -> "맞추는 중" to green
+                            issue -> "확인 필요" to cs.error
+                            else -> "연결됨" to green
+                        }
+                        Box(Modifier.size(6.dp).background(color, CircleShape))
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            listOfNotNull(label, "일정 $n".takeIf { n > 0 }, s.bridgeReport?.let { "맞춤 ${agoKo(it.atMillis)}" }).joinToString(" · "),
+                            fontSize = 11.sp, color = color, maxLines = 1,
+                        )
+                    }
+                }
+                Icon(OloIcons.ChevronRight, contentDescription = "연결 관리", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            }
+            if (rest.isNotEmpty()) {
+                HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.4f))
+                rest.forEach { c ->
+                    CalendarLine(c, nav, shown(c.id), title = c.name, subtitle = null, status = null, trailing = {
+                        val k = s.eventCounts[c.id] ?: 0
+                        if (k > 0) Text("$k", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(end = 12.dp))
+                    }, lead = 6.dp)
+                }
+            }
+        }
     }
 }
 
