@@ -60,6 +60,7 @@ import kotlinx.datetime.toLocalDateTime
 class AndroidCalendarStore(context: Context) : CalendarStore {
     private val resolver: ContentResolver = context.applicationContext.contentResolver
     private val zone get() = TimeZone.currentSystemDefault()
+    private val accounts = android.accounts.AccountManager.get(context.applicationContext)
 
     override suspend fun calendars(): List<CalendarInfo> = io {
         val projection = arrayOf(
@@ -268,11 +269,14 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             Events.CONTENT_URI, arrayOf(Events._ID),
             "${Events.DIRTY} = 1 AND ${Events.ACCOUNT_TYPE} = ?", arrayOf("com.google"), null,
         )?.use { it.count } ?: 0
-        val off = googleAccounts().filter { name ->
+        // Only accounts OLO can see answer truthfully; the rest read as "off" whatever they are.
+        val visible = runCatching { accounts.getAccountsByType("com.google").map { it.name }.toSet() }.getOrDefault(emptySet())
+        val all = googleAccounts()
+        val off = all.filter { it in visible }.filter { name ->
             runCatching { !ContentResolver.getSyncAutomatically(Account(name, "com.google"), CalendarContract.AUTHORITY) }.getOrDefault(false)
         }
         val master = runCatching { ContentResolver.getMasterSyncAutomatically() }.getOrDefault(true)
-        SyncStatus(pendingUploads = pending, accountsWithSyncOff = off, masterSyncOn = master)
+        SyncStatus(pendingUploads = pending, accountsWithSyncOff = off, masterSyncOn = master, accountsNeedingAccess = all.filterNot { it in visible })
     }
 
     // WRITE_SYNC_SETTINGS is a normal permission: granted at install, no prompt.

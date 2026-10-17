@@ -303,7 +303,7 @@ fun CalendarScreen(
             samsung = state.calendarsById[s.samsungCalendarId],
             state = state,
             controller = controller,
-            onEnableSync = { account -> controller.setAccountSync(account, true) { ok -> if (!ok) settings?.openSyncSettings() } },
+            onEnableSync = { account -> enableSync(account, state, controller, settings) { syncNote = it } },
             onChanged = { on -> settings?.bridgeChanged(on) },
             onDismiss = { sheet = Sheet.None },
         )
@@ -630,23 +630,14 @@ private fun calendarNav(
     onShowOnly = controller::showOnly,
     onShowDefault = controller::showDefault,
     onFold = controller::setFolded,
-    onEnableSync = { account ->
-        controller.setAccountSync(account, true) { ok ->
-            if (ok) {
-                onNote(SyncNote("$account 캘린더 동기화를 켰습니다") { controller.setAccountSync(account, false); onNote(null) })
-            } else {
-                onNote(SyncNote("휴대폰이 허용하지 않아 계정 설정을 엽니다", null))
-                settings?.openSyncSettings()
-            }
-        }
-    },
+    onEnableSync = { account -> enableSync(account, state, controller, settings, onNote) },
     onEnableMaster = {
         controller.setMasterSync(true) { ok ->
             if (ok) onNote(SyncNote("휴대폰 자동 동기화를 켰습니다") { controller.setMasterSync(false); onNote(null) })
             else settings?.openSyncSettings()
         }
     },
-    onAccountSettings = { settings?.openSyncSettings() },
+    onAccountSettings = { account -> settings?.openAccountSync(account) },
     onMove = onMove,
     onHue = controller::setHue,
     onCalendars = onCalendars,
@@ -659,3 +650,28 @@ private fun calendarNav(
 /** A Samsung-account calendar is joined to Google (the bridge); a phone-only one is moved. */
 private fun moveOrBridge(state: CalendarUiState, calendarId: String): Sheet =
     if (state.calendarsById[calendarId]?.kind == app.olo.calendar.model.SyncKind.SAMSUNG) Sheet.Bridge(calendarId) else Sheet.Move(calendarId)
+
+/**
+ * Turns a Google account's calendar sync on. An account OLO may not see yet
+ * goes through the system account chooser first (Android 8+); if the phone
+ * still refuses, that account's own sync page opens.
+ */
+private fun enableSync(account: String, state: CalendarUiState, controller: CalendarController, settings: SystemSettings?, onNote: (SyncNote?) -> Unit) {
+    val turnOn = {
+        controller.setAccountSync(account, true) { ok ->
+            if (ok) {
+                onNote(SyncNote("$account 캘린더 동기화를 켰습니다") { controller.setAccountSync(account, false); onNote(null) })
+            } else {
+                onNote(SyncNote("휴대폰이 허용하지 않아 이 계정의 동기화 설정을 엽니다", null))
+                settings?.openAccountSync(account)
+            }
+        }
+    }
+    if (account in state.sync.accountsNeedingAccess && settings != null) {
+        settings.allowAccount(account) { allowed ->
+            if (allowed) turnOn() else onNote(SyncNote("계정을 허용하지 않아 동기화를 켜지 못했습니다", null))
+        }
+    } else {
+        turnOn()
+    }
+}

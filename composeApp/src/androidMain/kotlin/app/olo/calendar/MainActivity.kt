@@ -54,6 +54,31 @@ class MainActivity : ComponentActivity(), PermissionGate, SystemSettings {
 
     override fun request() = launcher.launch(perms)
 
+    private var accountDone: ((Boolean) -> Unit)? = null
+    private var accountAsked: String? = null
+    private val accountChooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val picked = r.data?.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
+        accountDone?.invoke(r.resultCode == RESULT_OK && picked == accountAsked)
+        accountDone = null
+    }
+
+    // Picking the account in the system chooser makes it visible to OLO (Android 8+),
+    // after which its calendar sync can be read and switched.
+    override fun allowAccount(account: String, done: (Boolean) -> Unit) {
+        val a = android.accounts.Account(account, "com.google")
+        accountAsked = account
+        accountDone = done
+        val intent = android.accounts.AccountManager.newChooseAccountIntent(
+            a, arrayListOf(a), arrayOf("com.google"), null, null, null, null,
+        )
+        runCatching { accountChooser.launch(intent) }.onFailure { accountDone = null; done(false) }
+    }
+
+    override fun openAccountSync(account: String) {
+        val i = Intent("android.settings.ACCOUNT_SYNC_SETTINGS").putExtra("account", android.accounts.Account(account, "com.google"))
+        runCatching { startActivity(i) }.onFailure { openSyncSettings() }
+    }
+
     override fun openSyncSettings() {
         runCatching { startActivity(Intent(Settings.ACTION_SYNC_SETTINGS)) }
             .onFailure { startActivity(Intent(Settings.ACTION_SETTINGS)) }

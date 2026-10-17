@@ -101,6 +101,15 @@ class CalendarGroupsTest {
     }
 
     @Test
+    fun anAccountOloCannotSeeIsUnknownNotOff() {
+        val t = buildCalendarTree(cals, counts, listOf("kgcaudit02@gmail.com"), needsAccess = listOf("hazakuqa@gmail.com"))
+        val mine = t.first { it.category == CalendarCategory.MINE }.accounts
+        assertEquals(AccountStatus.NEEDS_ACCESS, mine.first { it.title == "hazakuqa@gmail.com" }.status)
+        assertEquals(AccountStatus.SYNC_OFF, mine.first { it.title == "kgcaudit02@gmail.com" }.status)
+        assertEquals(AccountStatus.SYNCING, mine.first { it.title == "sutest@gmail.com" && it.subtitle == "Google" }.status)
+    }
+
+    @Test
     fun triStates() {
         assertEquals(TriState.ALL, triState(listOf("a", "b")) { true })
         assertEquals(TriState.SOME, triState(listOf("a", "b")) { it == "a" })

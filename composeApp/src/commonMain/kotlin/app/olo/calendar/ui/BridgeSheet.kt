@@ -137,7 +137,7 @@ private fun Connect(
         }
     }
     val t = target
-    if (t != null && t.accountName in state.sync.accountsWithSyncOff) {
+    if (t != null && (t.accountName in state.sync.accountsWithSyncOff || t.accountName in state.sync.accountsNeedingAccess)) {
         Surface(color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f), shape = MaterialTheme.shapes.small) {
             Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("이 계정의 캘린더 동기화가 꺼져 있어 아이폰까지 가지 않습니다.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
@@ -215,7 +215,7 @@ private fun Connected(
             }
         }
     }
-    if (google != null && google.accountName in state.sync.accountsWithSyncOff) {
+    if (google != null && (google.accountName in state.sync.accountsWithSyncOff || google.accountName in state.sync.accountsNeedingAccess)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("${google.accountName} 동기화가 꺼져 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
             OloTextButton("켜기", { onEnableSync(google.accountName) })

@@ -18,6 +18,8 @@ enum class CalendarCategory(val label: String) {
 enum class AccountStatus(val label: String) {
     SYNCING("동기화 중"),
     SYNC_OFF("동기화 꺼짐"),
+    /** OLO has not been allowed to see this account yet, so its sync state is unknown. */
+    NEEDS_ACCESS("확인 필요"),
     DEVICE_ONLY("이 기기만"),
     READ_ONLY("읽기 전용"),
 }
@@ -89,11 +91,15 @@ private fun kindTitle(c: CalendarInfo): String = when {
     }
 }
 
-fun accountStatus(cals: List<CalendarInfo>, accountsWithSyncOff: Collection<String>): AccountStatus {
+fun accountStatus(cals: List<CalendarInfo>, accountsWithSyncOff: Collection<String>, needsAccess: Collection<String> = emptyList()): AccountStatus {
     val c = cals.first()
     return when {
         c.kind == SyncKind.GOOGLE || c.kind == SyncKind.EXCHANGE || c.kind == SyncKind.ICLOUD ->
-            if (c.accountName in accountsWithSyncOff) AccountStatus.SYNC_OFF else AccountStatus.SYNCING
+            when (c.accountName) {
+                in needsAccess -> AccountStatus.NEEDS_ACCESS
+                in accountsWithSyncOff -> AccountStatus.SYNC_OFF
+                else -> AccountStatus.SYNCING
+            }
         cals.none { it.writable } -> AccountStatus.READ_ONLY
         else -> AccountStatus.DEVICE_ONLY
     }
@@ -108,6 +114,7 @@ fun buildCalendarTree(
     calendars: List<CalendarInfo>,
     counts: Map<String, Int>,
     accountsWithSyncOff: Collection<String>,
+    needsAccess: Collection<String> = emptyList(),
 ): List<CategoryGroup> {
     val n = { c: CalendarInfo -> counts[c.id] ?: 0 }
     val calendarOrder = compareBy<CalendarInfo>(
@@ -120,7 +127,7 @@ fun buildCalendarTree(
                 key = "${cat.name}/${k.first}/${k.second}",
                 title = accountTitle(sorted.first()),
                 subtitle = kindTitle(sorted.first()),
-                status = accountStatus(sorted, accountsWithSyncOff),
+                status = accountStatus(sorted, accountsWithSyncOff, needsAccess),
                 calendars = sorted,
             )
         }.sortedWith(

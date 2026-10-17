@@ -93,7 +93,7 @@ class NavActions(
     /** Turn a Google account's calendar sync on, here and now (docs/06 §3). */
     val onEnableSync: (String) -> Unit,
     val onEnableMaster: () -> Unit,
-    val onAccountSettings: () -> Unit,
+    val onAccountSettings: (String) -> Unit,
     /** Open "Google로 옮기기" for a phone-only calendar. */
     val onMove: (String) -> Unit,
     val onHue: (String, OloHue?) -> Unit,
@@ -227,7 +227,7 @@ private fun CalendarCategory.foldedByDefault() = this == CalendarCategory.HOLIDA
 @Composable
 fun CalendarTree(nav: NavActions, horizontal: androidx.compose.ui.unit.Dp = 10.dp) {
     val s = nav.state
-    val tree = remember(s.calendars, s.eventCounts, s.sync) { buildCalendarTree(s.calendars, s.eventCounts, s.sync.accountsWithSyncOff) }
+    val tree = remember(s.calendars, s.eventCounts, s.sync) { buildCalendarTree(s.calendars, s.eventCounts, s.sync.accountsWithSyncOff, s.sync.accountsNeedingAccess) }
     val shown = { id: String -> s.calendarsById[id]?.let(s::isShown) ?: false }
     val allIds = s.calendars.map { it.id }
     Column(Modifier.padding(horizontal = horizontal)) {
@@ -408,6 +408,28 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
             Spacer(Modifier.width(4.dp))
             Text("동기화", fontSize = 10.sp, color = g)
         }
+        AccountStatus.NEEDS_ACCESS -> {
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                Chip("확인 필요", cs.onSecondaryContainer, cs.secondaryContainer, OloIcons.ChevronDown) { menu = true }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    Text(
+                        "OLO가 이 계정의 동기화를 보고 켜려면\n계정 선택 화면에서 한 번 허용해야 합니다", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    )
+                    DropdownMenuItem(
+                        text = { Text("허용하고 동기화 켜기", color = cs.primary, fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(OloIcons.Sync, contentDescription = null, tint = cs.primary) },
+                        onClick = { menu = false; nav.onEnableSync(account.calendars.first().accountName) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("계정 설정 열기") },
+                        leadingIcon = { Icon(OloIcons.Settings, contentDescription = null) },
+                        onClick = { menu = false; nav.onAccountSettings(account.calendars.first().accountName) },
+                    )
+                }
+            }
+        }
         AccountStatus.SYNC_OFF -> {
             var menu by remember { mutableStateOf(false) }
             Box {
@@ -425,7 +447,7 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
                     DropdownMenuItem(
                         text = { Text("계정 설정 열기") },
                         leadingIcon = { Icon(OloIcons.Settings, contentDescription = null) },
-                        onClick = { menu = false; nav.onAccountSettings() },
+                        onClick = { menu = false; nav.onAccountSettings(account.calendars.first().accountName) },
                     )
                 }
             }

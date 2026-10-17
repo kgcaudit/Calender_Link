@@ -102,4 +102,11 @@ data class SyncStatus(
     val accountsWithSyncOff: List<String> = emptyList(),
     /** System-wide auto-sync switch. */
     val masterSyncOn: Boolean = true,
+    /**
+     * Google accounts OLO may not look at yet. Since Android 8 an app sees
+     * another app's account (and its sync switch) only after the person picks
+     * it once in the system account chooser; until then reads say "off" and
+     * writes are silently ignored.
+     */
+    val accountsNeedingAccess: List<String> = emptyList(),
 )

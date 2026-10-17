@@ -36,6 +36,15 @@ interface SystemSettings {
     /** The phone's account-sync settings, where Google calendar sync is switched on. */
     fun openSyncSettings()
 
+    /**
+     * Asks the person, through the system account chooser, to let OLO see a
+     * Google account (needed before its sync switch can be read or set).
+     */
+    fun allowAccount(account: String, done: (Boolean) -> Unit) { done(false) }
+
+    /** That one account's sync page (calendar switch), else the general sync settings. */
+    fun openAccountSync(account: String) { openSyncSettings() }
+
     /** The bridge was switched on or off: the platform (re)schedules its background passes. */
     fun bridgeChanged(on: Boolean) {}
 }

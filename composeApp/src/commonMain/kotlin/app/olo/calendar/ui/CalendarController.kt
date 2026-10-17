@@ -90,6 +90,7 @@ data class CalendarUiState(
         get() = buildList {
             if (!sync.masterSyncOn) add(SyncAction.MasterSyncOff)
             sync.accountsWithSyncOff.forEach { add(SyncAction.AccountSyncOff(it)) }
+            sync.accountsNeedingAccess.forEach { add(SyncAction.AccountSyncOff(it)) }
             stranded.forEach { (c, n) -> add(SyncAction.Stranded(c, n)) }
         }
 
