@@ -208,6 +208,20 @@ class BridgeTest {
         assertEquals(1, store.count("G"))
         assertTrue(engine.recoverable(cfg).isEmpty())
     }
+
+    @Test
+    fun syncNowLeavesExcludedAccountsAlone() = runTest {
+        val store = FakeBridgeStore()
+        val prefs = MemoryPreferences()
+        prefs.put("syncExcluded", "com.google/hazakuqa@gmail.com")
+        val controller = app.olo.calendar.ui.CalendarController(store, backgroundScope, prefs = prefs)
+        controller.syncNow()
+        // Background work is not waited for by advanceUntilIdle: step virtual time past the 1.5 s wait.
+        testScheduler.advanceTimeBy(5_000)
+        testScheduler.runCurrent()
+        assertEquals(setOf("com.google/hazakuqa@gmail.com"), store.lastExclude)
+        assertEquals(false, controller.state.value.syncRun?.running)
+    }
 }
 
 /** Two calendars in memory, enough of CalendarStore for the bridge. */
@@ -253,7 +267,8 @@ private class FakeBridgeStore : CalendarStore {
     override suspend fun syncStatus() = SyncStatus()
     override suspend fun setAccountSync(account: String, on: Boolean) = true
     override suspend fun setMasterSync(on: Boolean) = true
-    override fun requestSync() = Unit
+    var lastExclude: Set<String>? = null
+    override fun requestSync(exclude: Set<String>) { lastExclude = exclude }
     override fun changes(): Flow<Unit> = emptyFlow()
     override suspend fun eventCounts(): Map<String, Int> = emptyMap()
     override suspend fun planMove(fromCalendarId: String) = MovePlan(fromCalendarId, 0, 0, 0, 0)

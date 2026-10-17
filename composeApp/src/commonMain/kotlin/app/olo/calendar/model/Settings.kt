@@ -28,6 +28,12 @@ data class AppSettings(
     /** The Galaxy bridge (docs/07): Samsung Calendar ⇄ the Google main calendar. */
     val bridgeSamsungId: String? = null,
     val bridgeGoogleId: String? = null,
+    /**
+     * Accounts "지금 동기화" leaves alone (docs/07 §17), as [syncAccountKey]s
+     * ("type/name": a Samsung account and a Google account can share a name).
+     * OLO-only: the phone's own automatic sync of them goes on.
+     */
+    val syncExcluded: Set<String> = emptySet(),
 ) {
     val bridgeOn: Boolean get() = bridgeSamsungId != null && bridgeGoogleId != null
 }
@@ -62,6 +68,7 @@ fun Preferences.loadSettings(): AppSettings {
         hues = decodeMap(get("hues")),
         bridgeSamsungId = get("bridgeSamsungId"),
         bridgeGoogleId = get("bridgeGoogleId"),
+        syncExcluded = get("syncExcluded").orEmpty().split('\n').filter { it.isNotBlank() }.toSet(),
     )
 }
 
@@ -79,4 +86,5 @@ fun Preferences.saveSettings(s: AppSettings) {
     put("hues", encodeMap(s.hues))
     put("bridgeSamsungId", s.bridgeSamsungId)
     put("bridgeGoogleId", s.bridgeGoogleId)
+    put("syncExcluded", s.syncExcluded.joinToString("\n").ifEmpty { null })
 }

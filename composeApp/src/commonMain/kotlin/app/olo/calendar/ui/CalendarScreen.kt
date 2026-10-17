@@ -706,6 +706,17 @@ private fun calendarNav(
         }
     },
     onAccountSettings = { account -> settings?.openAccountSync(account) },
+    onSyncExclude = { key, excluded ->
+        controller.setSyncExcluded(key, excluded)
+        val name = key.substringAfter('/')
+        onNote(SyncNote(if (excluded) "$name 지금 동기화에서 제외" else "$name 지금 동기화에 다시 포함") { controller.setSyncExcluded(key, !excluded); onNote(null) })
+    },
+    onDisableSync = { account ->
+        controller.setAccountSync(account, false) { ok ->
+            if (ok) onNote(SyncNote("$account 캘린더 동기화를 껐습니다") { controller.setAccountSync(account, true); onNote(null) })
+            else { onNote(SyncNote("휴대폰이 허용하지 않아 이 계정의 동기화 설정을 엽니다", null)); settings?.openAccountSync(account) }
+        }
+    },
     onMove = onMove,
     onHue = controller::setHue,
     onCalendars = onCalendars,

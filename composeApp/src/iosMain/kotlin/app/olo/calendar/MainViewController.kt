@@ -49,7 +49,7 @@ private object PendingIosStore : CalendarStore {
     override suspend fun bridgeDeleted(calendarId: String): List<app.olo.calendar.model.BridgeItem> = emptyList()
     override suspend fun bridgeRestore(deletedId: String, toCalendarId: String): String? = null
     override suspend fun setMasterSync(on: Boolean) = false
-    override fun requestSync() = Unit
+    override fun requestSync(exclude: Set<String>) = Unit
     override fun changes(): Flow<Unit> = emptyFlow()
     override suspend fun eventCounts(): Map<String, Int> = emptyMap()
     override suspend fun planMove(fromCalendarId: String): MovePlan = MovePlan(fromCalendarId, 0, 0, 0, 0)

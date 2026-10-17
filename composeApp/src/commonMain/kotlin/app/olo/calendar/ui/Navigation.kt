@@ -86,6 +86,7 @@ import app.olo.calendar.model.ViewMode
 import app.olo.calendar.model.buildCalendarTree
 import app.olo.calendar.model.triState
 import app.olo.calendar.model.isSamsungBuiltIn
+import app.olo.calendar.model.syncKey
 
 class NavActions(
     val state: CalendarUiState,
@@ -98,6 +99,10 @@ class NavActions(
     val onEnableSync: (String) -> Unit,
     val onEnableMaster: () -> Unit,
     val onAccountSettings: (String) -> Unit,
+    /** Leave an account ("type/name") out of "지금 동기화", or take it back (docs/07 §17). */
+    val onSyncExclude: (String, Boolean) -> Unit = { _, _ -> },
+    /** Turn an account's calendar sync off on the phone (all apps). */
+    val onDisableSync: (String) -> Unit = {},
     /** Open "Google로 옮기기" for a phone-only calendar. */
     val onMove: (String) -> Unit,
     val onHue: (String, OloHue?) -> Unit,
@@ -242,8 +247,8 @@ fun CalendarTree(nav: NavActions, horizontal: androidx.compose.ui.unit.Dp = 10.d
         samsungHome != null -> setOf(samsungHome.id)
         else -> emptySet()
     }
-    val tree = remember(s.calendars, s.eventCounts, s.sync, mainIds) {
-        buildCalendarTree(s.calendars, s.eventCounts, s.sync.accountsWithSyncOff, s.sync.accountsNeedingAccess, mainIds)
+    val tree = remember(s.calendars, s.eventCounts, s.sync, mainIds, s.settings.syncExcluded) {
+        buildCalendarTree(s.calendars, s.eventCounts, s.sync.accountsWithSyncOff, s.sync.accountsNeedingAccess, mainIds, s.settings.syncExcluded)
     }
     val shown = { id: String -> s.calendarsById[id]?.let(s::isShown) ?: false }
     Column(Modifier.padding(horizontal = horizontal)) {
@@ -616,11 +621,48 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
     val cs = MaterialTheme.colorScheme
     val dark = cs.background.luminanceIsDarkPublic()
     when (account.status) {
-        AccountStatus.SYNCING -> Row(Modifier.padding(end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        AccountStatus.SYNCING -> {
+            var menu by remember { mutableStateOf(false) }
             val g = if (dark) Color(0xFF8FD1AE) else Color(0xFF2F6B4F)
-            Box(Modifier.size(6.dp).background(g, CircleShape))
-            Spacer(Modifier.width(4.dp))
-            Text("동기화", fontSize = 10.sp, color = g)
+            Box {
+                Row(
+                    Modifier.padding(end = 6.dp).clip(CircleShape).clickable { menu = true }.padding(start = 2.dp, end = 3.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(6.dp).background(g, CircleShape))
+                    Spacer(Modifier.width(4.dp))
+                    Text("동기화", fontSize = 10.sp, color = g)
+                    Icon(OloIcons.ChevronDown, contentDescription = "동기화 메뉴", tint = g, modifier = Modifier.size(11.dp))
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    ExcludeItem(account, nav, excluded = false) { menu = false }
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("휴대폰 동기화 끄기")
+                                Text("Samsung·Google 캘린더 앱에도 적용", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                            }
+                        },
+                        leadingIcon = { Icon(OloIcons.Warning, contentDescription = null) },
+                        onClick = { menu = false; nav.onDisableSync(account.calendars.first().accountName) },
+                    )
+                    AccountSettingsItem(account, nav) { menu = false }
+                }
+            }
+        }
+        AccountStatus.EXCLUDED -> {
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                Chip("제외됨", cs.onSurfaceVariant, cs.surfaceContainerHighest, OloIcons.ChevronDown) { menu = true }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    Text(
+                        "지금 동기화가 이 계정을 건너뜁니다.\n휴대폰의 자동 동기화는 그대로입니다.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    )
+                    ExcludeItem(account, nav, excluded = true) { menu = false }
+                    AccountSettingsItem(account, nav) { menu = false }
+                }
+            }
         }
         AccountStatus.NEEDS_ACCESS -> {
             var menu by remember { mutableStateOf(false) }
@@ -636,11 +678,8 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
                         leadingIcon = { Icon(OloIcons.Sync, contentDescription = null, tint = cs.primary) },
                         onClick = { menu = false; nav.onEnableSync(account.calendars.first().accountName) },
                     )
-                    DropdownMenuItem(
-                        text = { Text("계정 설정 열기") },
-                        leadingIcon = { Icon(OloIcons.Settings, contentDescription = null) },
-                        onClick = { menu = false; nav.onAccountSettings(account.calendars.first().accountName) },
-                    )
+                    ExcludeItem(account, nav, excluded = false) { menu = false }
+                    AccountSettingsItem(account, nav) { menu = false }
                 }
             }
         }
@@ -683,6 +722,41 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
         AccountStatus.READ_ONLY -> Text("읽기 전용 · ", fontSize = 10.sp, color = cs.onSurfaceVariant)
     }
 }
+
+/**
+ * "지금 동기화에서 제외" / "다시 포함" (docs/07 §17). OLO-only: the phone keeps
+ * syncing the account on its own. The Google main account warns that the
+ * iPhone will see Galaxy changes later.
+ */
+@Composable
+private fun ExcludeItem(account: AccountGroup, nav: NavActions, excluded: Boolean, close: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val first = account.calendars.first()
+    val isMain = nav.state.bridgeGoogle?.let { it.accountName == first.accountName && it.accountType == first.accountType } == true
+    DropdownMenuItem(
+        text = {
+            Column {
+                Text(if (excluded) "지금 동기화에 다시 포함" else "지금 동기화에서 제외", color = if (excluded) cs.primary else Color.Unspecified, fontWeight = if (excluded) FontWeight.SemiBold else null)
+                val note = when {
+                    excluded -> null
+                    isMain -> "구글 메인 계정: 아이폰 반영이 늦어질 수 있음"
+                    else -> "OLO만 · 휴대폰 자동 동기화는 그대로"
+                }
+                if (note != null) Text(note, style = MaterialTheme.typography.labelSmall, color = if (isMain) cs.error else cs.onSurfaceVariant)
+            }
+        },
+        leadingIcon = { Icon(OloIcons.Sync, contentDescription = null, tint = if (excluded) cs.primary else LocalContentColor.current) },
+        onClick = { close(); nav.onSyncExclude(first.syncKey, !excluded) },
+    )
+}
+
+@Composable
+private fun AccountSettingsItem(account: AccountGroup, nav: NavActions, close: () -> Unit) =
+    DropdownMenuItem(
+        text = { Text("계정 설정 열기") },
+        leadingIcon = { Icon(OloIcons.Settings, contentDescription = null) },
+        onClick = { close(); nav.onAccountSettings(account.calendars.first().accountName) },
+    )
 
 @Composable
 private fun Chip(text: String, fg: Color, bg: Color, icon: ImageVector?, onClick: (() -> Unit)?) {
@@ -832,6 +906,7 @@ private fun SyncNowRow(run: SyncRun?, onClick: () -> Unit) {
                         else -> "바뀐 일정 없음"
                     },
                     run.matched?.takeIf { it > 0 }?.let { "맞춤 ${it}개" },
+                    run.excluded.takeIf { it > 0 }?.let { "${it}개 계정 제외" },
                 ).joinToString(" · ")
             }
             if (line != null) Text(line, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)

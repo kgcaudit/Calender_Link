@@ -60,6 +60,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
+import app.olo.calendar.model.syncAccounts
+import app.olo.calendar.model.syncKey
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -358,6 +360,7 @@ fun SettingsSheet(
 ) {
     val st = state.settings
     var picking by remember { mutableStateOf(false) }
+    var choosingSync by remember { mutableStateOf(false) }
     // Android's settings guidelines: groups under a short heading with a divider,
     // one line per setting, a summary only where it states a value or a limit.
     OloSheet(onDismiss) {
@@ -384,11 +387,28 @@ fun SettingsSheet(
                 Icon(OloIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
             }
 
+            SettingGroup("동기화")
+            val accounts = syncAccounts(state.calendars)
+            val included = accounts.count { it.syncKey !in st.syncExcluded && it.accountName !in state.sync.accountsWithSyncOff }
+            SettingRow("지금 동기화 대상", summary = "${accounts.size}개 계정 중 ${included}개", onClick = { choosingSync = true }) {
+                Icon(OloIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            }
+
             SettingGroup("정보")
             SettingRow("시간 형식", summary = "휴대폰 설정(12/24시간)을 따름")
             SettingRow("알림", summary = "휴대폰·Google 캘린더 알림을 그대로 씀")
             SettingRow("개인정보", summary = "일정은 휴대폰 캘린더에만 저장, 서버 전송 없음")
         }
+    }
+
+    if (choosingSync) {
+        AlertDialog(
+            onDismissRequest = { choosingSync = false },
+            shape = MaterialTheme.shapes.extraLarge,
+            title = { Text("지금 동기화 대상") },
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) { SyncTargets(state, onChange) } },
+            confirmButton = { OloTextButton("닫기", onClick = { choosingSync = false }) },
+        )
     }
 
     if (picking) {
@@ -403,6 +423,41 @@ fun SettingsSheet(
             },
             confirmButton = { OloTextButton("닫기", onClick = { picking = false }) },
         )
+    }
+}
+
+/**
+ * Which accounts "지금 동기화" asks (docs/07 §17). Unticked = left out by OLO
+ * only. An account whose sync is off on the phone is never asked; its box is
+ * greyed and says so.
+ */
+@Composable
+private fun SyncTargets(state: CalendarUiState, onChange: ((AppSettings) -> AppSettings) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val st = state.settings
+    Text("체크를 끄면 OLO의 지금 동기화만 건너뜁니다. 휴대폰 자동 동기화는 그대로입니다.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+    Spacer(Modifier.height(8.dp))
+    syncAccounts(state.calendars).forEach { c ->
+        val off = c.accountName in state.sync.accountsWithSyncOff && c.accountName !in state.sync.accountsNeedingAccess
+        val on = !off && c.syncKey !in st.syncExcluded
+        val isMain = state.bridgeGoogle?.let { it.accountName == c.accountName && it.accountType == c.accountType } == true
+        val toggle = { v: Boolean -> onChange { it.copy(syncExcluded = if (v) it.syncExcluded - c.syncKey else it.syncExcluded + c.syncKey) } }
+        Row(
+            Modifier.fillMaxWidth().then(if (!off) Modifier.clickable { toggle(!on) } else Modifier).alpha(if (off) 0.55f else 1f).padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = on, onCheckedChange = if (off) null else toggle, enabled = !off)
+            Column(Modifier.weight(1f)) {
+                Text(c.accountName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val note = when {
+                    off -> "휴대폰에서 동기화 꺼짐 · 자동으로 제외"
+                    isMain && !on -> "구글 메인 계정 · 아이폰 반영이 늦어질 수 있음"
+                    isMain -> "${c.kind.koLabel()} · 구글 메인 계정"
+                    else -> c.kind.koLabel()
+                }
+                Text(note, style = MaterialTheme.typography.labelSmall, color = if (isMain && !on) cs.error else cs.onSurfaceVariant)
+            }
+        }
     }
 }
 

@@ -16,6 +16,8 @@ import app.olo.calendar.model.loadSettings
 import app.olo.calendar.model.looksLikeHolidayCalendar
 import app.olo.calendar.model.saveSettings
 import app.olo.calendar.model.triState
+import app.olo.calendar.model.syncAccounts
+import app.olo.calendar.model.syncKey
 import app.olo.calendar.design.OloHue
 import app.olo.calendar.design.oloHueFor
 import kotlin.test.Test
@@ -136,6 +138,21 @@ class CalendarGroupsTest {
     }
 
     @Test
+    fun excludedAccountsReadExcludedAndKeysKeepSamsungApartFromGoogle() {
+        // sutest is both a Google account and the Samsung account: excluding one leaves the other.
+        val keys = syncAccounts(cals).map { it.syncKey }
+        assertTrue("com.google/sutest@gmail.com" in keys && "com.osp.app.signin/sutest@gmail.com" in keys)
+        assertFalse(keys.any { it.contains("local") })
+        val t = buildCalendarTree(cals, counts, emptyList(), excluded = setOf("com.google/hazakuqa@gmail.com"))
+        val google = t.first { it.category == CalendarCategory.GOOGLE }.accounts
+        assertEquals(AccountStatus.EXCLUDED, google.first { it.title == "hazakuqa@gmail.com" }.status)
+        assertEquals(AccountStatus.SYNCING, google.first { it.title == "sutest@gmail.com" }.status)
+        // Off on the phone wins over excluded: nothing syncs it either way.
+        val off = buildCalendarTree(cals, counts, listOf("hazakuqa@gmail.com"), excluded = setOf("com.google/hazakuqa@gmail.com"))
+        assertEquals(AccountStatus.SYNC_OFF, off.first { it.category == CalendarCategory.GOOGLE }.accounts.first { it.title == "hazakuqa@gmail.com" }.status)
+    }
+
+    @Test
     fun triStates() {
         assertEquals(TriState.ALL, triState(listOf("a", "b")) { true })
         assertEquals(TriState.SOME, triState(listOf("a", "b")) { it == "a" })
@@ -146,7 +163,7 @@ class CalendarGroupsTest {
     @Test
     fun settingsRoundTrip() {
         val p = MemoryPreferences()
-        val s = AppSettings(monthStage = 2, visibility = mapOf("16" to false, "3" to true), folded = mapOf("HOLIDAYS" to false), verticalPagingWide = true, hues = mapOf("16" to "SKY", "7" to "IMAGE"))
+        val s = AppSettings(monthStage = 2, visibility = mapOf("16" to false, "3" to true), folded = mapOf("HOLIDAYS" to false), verticalPagingWide = true, hues = mapOf("16" to "SKY", "7" to "IMAGE"), syncExcluded = setOf("com.google/a@x.com", "com.osp.app.signin/a@x.com"))
         p.saveSettings(s)
         assertEquals(s.copy(lastView = s.lastView), p.loadSettings())
         assertEquals(mapOf("a" to true, "b" to false), decodeVisibility(encodeVisibility(mapOf("a" to true, "b" to false))))

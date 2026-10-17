@@ -55,6 +55,8 @@ class ScreenshotTest {
         // The whole drawer at once, down to the sync cards.
         render("month-drawer-tall", dark = false, drawer = true, height = 5200)
         render("month-drawer-dark", dark = true, drawer = true)
+        // hazakuqa left out of 지금 동기화: its chip reads 제외됨.
+        render("month-drawer-excluded", dark = false, drawer = true, folded = "GENERAL=0,SRC/DEVICE=1", excludedExtra = "com.google/hazakuqa@gmail.com", height = 3600)
         // 공휴일 ticked: 개천절 and 한글날 as rose bars in their cells.
         render("month-holidays", dark = false, shownExtra = "12=1")
         render("bridge-sheet", dark = false, bridge = "16")
@@ -78,7 +80,7 @@ class ScreenshotTest {
     }
 
     private fun render(
-        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, bridged: Boolean = false, folded: String? = null, scrubAt: Float? = null, settingsOpen: Boolean = false, shownExtra: String? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
+        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, bridged: Boolean = false, folded: String? = null, scrubAt: Float? = null, settingsOpen: Boolean = false, shownExtra: String? = null, excludedExtra: String? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
         view: ViewMode = ViewMode.MONTH,
     ) {
         val scene = ImageComposeScene(width = width, height = height, density = Density(density)) {
@@ -91,6 +93,7 @@ class ScreenshotTest {
                         if (bridged) { prefs.put("bridgeSamsungId", "16"); prefs.put("bridgeGoogleId", "6"); prefs.put("folded", "GENERAL=0") }
                         if (folded != null) prefs.put("folded", folded)
                         if (shownExtra != null) prefs.put("visibility", shownExtra)
+                        if (excludedExtra != null) prefs.put("syncExcluded", excludedExtra)
                         CalendarController(SampleStore, scope, zone, prefs).also { it.setView(view) }
                     }
                     CalendarScreen(c, startStage = stage, startDrawerOpen = drawer, startSearch = search, startBridgeFor = bridge, startSettings = settingsOpen)
@@ -210,7 +213,7 @@ private object SampleStore : CalendarStore {
     override suspend fun bridgeDeleted(calendarId: String): List<app.olo.calendar.model.BridgeItem> = emptyList()
     override suspend fun bridgeRestore(deletedId: String, toCalendarId: String): String? = null
     override suspend fun setMasterSync(on: Boolean) = true
-    override fun requestSync() = Unit
+    override fun requestSync(exclude: Set<String>) = Unit
     override fun changes(): Flow<Unit> = emptyFlow()
     override suspend fun eventCounts(): Map<String, Int> = mapOf("16" to 412, "6" to 12, "1" to 3, "15" to 40)
     override suspend fun planMove(fromCalendarId: String): MovePlan = MovePlan(fromCalendarId, 0, 0, 0, 0)

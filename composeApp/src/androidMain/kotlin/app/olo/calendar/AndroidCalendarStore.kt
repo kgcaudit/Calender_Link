@@ -322,24 +322,36 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         }.getOrDefault(false).also { ok -> if (ok && on) requestSync() }
     }
 
-    override fun requestSync() {
+    override fun requestSync(exclude: Set<String>) {
         val extras = Bundle().apply {
             putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true)
             putBoolean(ContentResolver.SYNC_EXTRAS_EXPEDITED, true)
         }
         Thread {
-            syncedAccounts().forEach { a ->
+            syncTargets(exclude).forEach { a ->
                 runCatching { ContentResolver.requestSync(a, CalendarContract.AUTHORITY, extras) }
             }
         }.start()
     }
 
-    override suspend fun syncActive(): Boolean = io {
-        syncedAccounts().any { a ->
+    override suspend fun syncActive(exclude: Set<String>): Boolean = io {
+        syncTargets(exclude).any { a ->
             runCatching { ContentResolver.isSyncActive(a, CalendarContract.AUTHORITY) || ContentResolver.isSyncPending(a, CalendarContract.AUTHORITY) }
                 .getOrDefault(false)
         }
     }
+
+    /**
+     * Who "지금 동기화" asks: synced accounts minus the person's exclusions and
+     * minus any whose calendar sync is off on the phone. SYNC_EXTRAS_MANUAL
+     * ignores that switch, so without this check a manual request would sync
+     * an account the person turned off.
+     */
+    private fun syncTargets(exclude: Set<String>): List<Account> =
+        syncedAccounts().filter { a ->
+            "${a.type}/${a.name}" !in exclude &&
+                runCatching { ContentResolver.getSyncAutomatically(a, CalendarContract.AUTHORITY) }.getOrDefault(true)
+        }
 
     /**
      * Every account whose calendars a sync adapter carries: Google, Exchange,

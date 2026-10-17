@@ -3,6 +3,8 @@ package app.olo.calendar.ui
 import app.olo.calendar.model.AppSettings
 import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.model.SyncKind
+import app.olo.calendar.model.syncAccounts
+import app.olo.calendar.model.syncKey
 import app.olo.calendar.design.OloHue
 import app.olo.calendar.design.argb
 import app.olo.calendar.model.MemoryPreferences
@@ -341,6 +343,10 @@ class CalendarController(
 
     fun setFolded(key: String, folded: Boolean) = updateSettings { it.copy(folded = it.folded + (key to folded)) }
 
+    /** Leaves an account ("type/name") out of "지금 동기화", or takes it back (docs/07 §17). */
+    fun setSyncExcluded(key: String, excluded: Boolean) =
+        updateSettings { it.copy(syncExcluded = if (excluded) it.syncExcluded + key else it.syncExcluded - key) }
+
     fun goToday() {
         val t = todayNow
         _state.update { it.copy(selected = t, month = YearMonth.of(t), today = t) }
@@ -514,10 +520,11 @@ class CalendarController(
         scope.launch {
             val before = _state.value.eventCounts.values.sum()
             _state.update { it.copy(syncRun = SyncRun(running = true)) }
-            store.requestSync()
+            val excluded = _state.value.settings.syncExcluded
+            store.requestSync(excluded)
             delay(1500)
             var waited = 0
-            while (waited < 60 && runCatching { store.syncActive() }.getOrDefault(false)) { delay(1000); waited++ }
+            while (waited < 60 && runCatching { store.syncActive(excluded) }.getOrDefault(false)) { delay(1000); waited++ }
             val bridged = bridgeConfig()?.let { bridgePass(it, allowMassDelete = false).getOrNull() }
             reloadNow()
             val s = _state.value
@@ -528,7 +535,11 @@ class CalendarController(
                         running = false, atMillis = Clock.System.now().toEpochMilliseconds(),
                         added = maxOf(0, after - before), removed = maxOf(0, before - after),
                         matched = bridged?.let { b -> b.toGoogle + b.toSamsung },
-                        unreachable = s.sync.accountsNeedingAccess.size,
+                        // Excluded accounts are left alone on purpose: not counted as unreachable.
+                        unreachable = s.sync.accountsNeedingAccess.count { name ->
+                            s.calendars.none { it.accountName == name && it.syncKey in s.settings.syncExcluded }
+                        },
+                        excluded = syncAccounts(s.calendars).count { it.syncKey in s.settings.syncExcluded },
                     ),
                 )
             }
@@ -570,6 +581,8 @@ data class SyncRun(
     val matched: Int? = null,
     /** Accounts the phone may have skipped because OLO has not been allowed to see them. */
     val unreachable: Int = 0,
+    /** Accounts the person left out of "지금 동기화". */
+    val excluded: Int = 0,
 )
 
 /** One reason events might not reach the other phone. */

@@ -25,6 +25,8 @@ enum class AccountStatus(val label: String) {
     /** OLO has not been allowed to see this account yet, so its sync state is unknown. */
     NEEDS_ACCESS("확인 필요"),
     DEVICE_ONLY("이 기기만"),
+    /** Left out of "지금 동기화" by the person; the phone's automatic sync goes on. */
+    EXCLUDED("제외됨"),
     READ_ONLY("읽기 전용"),
 }
 
@@ -107,13 +109,33 @@ private fun kindTitle(c: CalendarInfo): String = when {
     }
 }
 
-fun accountStatus(cals: List<CalendarInfo>, accountsWithSyncOff: Collection<String>, needsAccess: Collection<String> = emptyList()): AccountStatus {
+/** How an account is named in [AppSettings.syncExcluded] and in sync requests: "type/name". */
+fun syncAccountKey(accountType: String, accountName: String): String = "$accountType/$accountName"
+
+val CalendarInfo.syncKey: String get() = syncAccountKey(accountType, accountName)
+
+/** Accounts a sync adapter carries (what "지금 동기화" asks): not phone-only or Samsung's built-ins. */
+val CalendarInfo.isSyncedAccount: Boolean
+    get() = !isSamsungBuiltIn && kind in setOf(SyncKind.GOOGLE, SyncKind.EXCHANGE, SyncKind.ICLOUD, SyncKind.SAMSUNG)
+
+/** The synced accounts, one calendar each (primary first), for the "지금 동기화 대상" list. */
+fun syncAccounts(calendars: List<CalendarInfo>): List<CalendarInfo> =
+    calendars.filter { it.isSyncedAccount }.sortedBy { !it.isPrimary }.distinctBy { it.syncKey }
+
+fun accountStatus(
+    cals: List<CalendarInfo>,
+    accountsWithSyncOff: Collection<String>,
+    needsAccess: Collection<String> = emptyList(),
+    excluded: Collection<String> = emptyList(),
+): AccountStatus {
     val c = cals.first()
     return when {
         c.kind == SyncKind.GOOGLE || c.kind == SyncKind.EXCHANGE || c.kind == SyncKind.ICLOUD ->
-            when (c.accountName) {
-                in needsAccess -> AccountStatus.NEEDS_ACCESS
-                in accountsWithSyncOff -> AccountStatus.SYNC_OFF
+            when {
+                // Off on the phone wins: then nothing syncs it, excluded or not.
+                c.accountName in accountsWithSyncOff && c.accountName !in needsAccess -> AccountStatus.SYNC_OFF
+                c.syncKey in excluded -> AccountStatus.EXCLUDED
+                c.accountName in needsAccess -> AccountStatus.NEEDS_ACCESS
                 else -> AccountStatus.SYNCING
             }
         cals.none { it.writable } -> AccountStatus.READ_ONLY
@@ -137,6 +159,8 @@ fun buildCalendarTree(
      * calendars leave it, and other personal calendars become "다른 캘린더".
      */
     mainSection: Set<String> = emptySet(),
+    /** [AppSettings.syncExcluded]: those accounts read "제외됨". */
+    excluded: Collection<String> = emptySet(),
 ): List<CategoryGroup> {
     val n = { c: CalendarInfo -> counts[c.id] ?: 0 }
     val calendarOrder = compareBy<CalendarInfo>(
@@ -151,7 +175,7 @@ fun buildCalendarTree(
                 key = "${cat.name}/${k.first}/${k.second}",
                 title = accountTitle(sorted.first()),
                 subtitle = kindTitle(sorted.first()),
-                status = accountStatus(sorted, accountsWithSyncOff, needsAccess),
+                status = accountStatus(sorted, accountsWithSyncOff, needsAccess, excluded),
                 calendars = sorted,
             )
         }.sortedWith(
