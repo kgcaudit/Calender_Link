@@ -57,25 +57,27 @@ class CalendarGroupsTest {
     private val tree = buildCalendarTree(cals, counts, listOf("kgcaudit02@gmail.com", "sutest@gmail.com"))
 
     @Test
-    fun categoriesInOrder() {
-        assertEquals(listOf(CalendarCategory.MINE, CalendarCategory.WORK, CalendarCategory.HOLIDAYS, CalendarCategory.SUBSCRIBED), tree.map { it.category })
-        val holidays = tree.first { it.category == CalendarCategory.HOLIDAYS }.calendars.map { it.id }.toSet()
-        assertEquals(setOf("2", "3", "5", "8", "11", "12", "13", "14"), holidays)
-        assertEquals(listOf("9"), tree.first { it.category == CalendarCategory.SUBSCRIBED }.calendars.map { it.id })
-        assertEquals(listOf("15"), tree.first { it.category == CalendarCategory.WORK }.calendars.map { it.id })
+    fun groupedBySourceThenAccount() {
+        assertEquals(listOf(CalendarCategory.DEVICE, CalendarCategory.SAMSUNG, CalendarCategory.GOOGLE, CalendarCategory.OTHER), tree.map { it.category })
+        val ids = { c: CalendarCategory -> tree.first { it.category == c }.calendars.map { it.id }.toSet() }
+        assertEquals(setOf("10"), ids(CalendarCategory.DEVICE))
+        // Samsung account plus Samsung's own holiday and contacts calendars.
+        assertEquals(setOf("16", "11", "12", "13", "14"), ids(CalendarCategory.SAMSUNG))
+        // Google holidays and subscriptions stay inside their accounts.
+        assertEquals(setOf("1", "2", "3", "4", "5", "6", "7", "8", "9"), ids(CalendarCategory.GOOGLE))
+        assertEquals(setOf("15"), ids(CalendarCategory.OTHER))
     }
 
     @Test
     fun accountsSortedAndLabelled() {
-        val mine = tree.first { it.category == CalendarCategory.MINE }.accounts
-        // Primary accounts first, then by events held: sutest (12 + family) before hazakuqa (3) before kgcaudit02 (0).
-        assertEquals("sutest@gmail.com", mine.first().title)
-        assertEquals(AccountStatus.SYNC_OFF, mine.first().status)
-        assertEquals(AccountStatus.SYNCING, mine.first { it.title == "hazakuqa@gmail.com" }.status)
-        val samsung = mine.first { it.calendars.any { c -> c.id == "16" } }
-        assertEquals(AccountStatus.DEVICE_ONLY, samsung.status)
-        assertEquals("삼성 계정", samsung.subtitle)
-        assertEquals("이 기기", mine.first { it.calendars.any { c -> c.id == "10" } }.title)
+        val google = tree.first { it.category == CalendarCategory.GOOGLE }.accounts
+        // Primary accounts first, then by events held: sutest (12) before hazakuqa (3) before kgcaudit02 (0).
+        assertEquals(listOf("sutest@gmail.com", "hazakuqa@gmail.com", "kgcaudit02@gmail.com"), google.map { it.title })
+        assertEquals(AccountStatus.SYNC_OFF, google.first().status)
+        assertEquals(AccountStatus.SYNCING, google.first { it.title == "hazakuqa@gmail.com" }.status)
+        val samsung = tree.first { it.category == CalendarCategory.SAMSUNG }.accounts
+        assertEquals(AccountStatus.DEVICE_ONLY, samsung.first { it.calendars.any { c -> c.id == "16" } }.status)
+        assertEquals("이 기기", tree.first { it.category == CalendarCategory.DEVICE }.accounts.single().title)
     }
 
     @Test
@@ -103,19 +105,19 @@ class CalendarGroupsTest {
     @Test
     fun anAccountOloCannotSeeIsUnknownNotOff() {
         val t = buildCalendarTree(cals, counts, listOf("kgcaudit02@gmail.com"), needsAccess = listOf("hazakuqa@gmail.com"))
-        val mine = t.first { it.category == CalendarCategory.MINE }.accounts
-        assertEquals(AccountStatus.NEEDS_ACCESS, mine.first { it.title == "hazakuqa@gmail.com" }.status)
-        assertEquals(AccountStatus.SYNC_OFF, mine.first { it.title == "kgcaudit02@gmail.com" }.status)
-        assertEquals(AccountStatus.SYNCING, mine.first { it.title == "sutest@gmail.com" && it.subtitle == "Google" }.status)
+        val google = t.first { it.category == CalendarCategory.GOOGLE }.accounts
+        assertEquals(AccountStatus.NEEDS_ACCESS, google.first { it.title == "hazakuqa@gmail.com" }.status)
+        assertEquals(AccountStatus.SYNC_OFF, google.first { it.title == "kgcaudit02@gmail.com" }.status)
+        assertEquals(AccountStatus.SYNCING, google.first { it.title == "sutest@gmail.com" }.status)
     }
 
     @Test
-    fun withTheBridgeTheMainPairLeavesTheTreeAndTheRestIsOther() {
+    fun withTheBridgeTheLinkedCalendarsLeaveTheGeneralTree() {
         // Samsung Calendar (16) ⇄ sutest (6), plus sutest's 가족 (7), drawn as the main section.
         val t = buildCalendarTree(cals, counts, emptyList(), mainSection = setOf("16", "6", "7"))
-        assertTrue(t.none { it.category == CalendarCategory.MINE })
-        val other = t.first { it.category == CalendarCategory.OTHER }.calendars.map { it.id }.toSet()
-        assertEquals(setOf("1", "4", "10"), other)
+        // sutest's holiday and game list stay in the Google group; the pair and 가족 are gone from it.
+        assertEquals(setOf("1", "2", "3", "4", "5", "8", "9"), t.first { it.category == CalendarCategory.GOOGLE }.calendars.map { it.id }.toSet())
+        assertEquals(setOf("11", "12", "13", "14"), t.first { it.category == CalendarCategory.SAMSUNG }.calendars.map { it.id }.toSet())
         assertTrue(t.flatMap { it.calendars }.none { it.id in setOf("16", "6", "7") })
     }
 

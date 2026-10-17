@@ -6,14 +6,16 @@ package app.olo.calendar.model
  * Samsung's and Google's apps keep their own settings.
  */
 
-/** Top level: what a calendar is for, not where it comes from. */
+/**
+ * Where a general calendar comes from (docs/07 §11): the drawer's "일반 캘린더"
+ * is split by source, then by account; holiday and subscribed calendars stay
+ * inside the account they belong to.
+ */
 enum class CalendarCategory(val label: String) {
-    MINE("내 캘린더"),
-    /** With the bridge on: personal calendars outside the main pair (docs/07 §9). */
-    OTHER("다른 캘린더"),
-    WORK("업무"),
-    HOLIDAYS("공휴일·기념일"),
-    SUBSCRIBED("구독"),
+    DEVICE("내 기기"),
+    SAMSUNG("Samsung"),
+    GOOGLE("Google"),
+    OTHER("기타"),
 }
 
 /** How an account's events travel; shown as a chip beside the account. */
@@ -62,10 +64,11 @@ fun looksLikeHolidayCalendar(ownerOrId: String?, accountName: String, name: Stri
         (!writable && holidayName.containsMatchIn(name))
 
 fun CalendarInfo.category(): CalendarCategory = when {
-    isHoliday || accountName == SAMSUNG_BIRTHDAY_ACCOUNT -> CalendarCategory.HOLIDAYS
-    kind == SyncKind.EXCHANGE -> CalendarCategory.WORK
-    !writable || kind == SyncKind.SUBSCRIBED -> CalendarCategory.SUBSCRIBED
-    else -> CalendarCategory.MINE
+    // Samsung's own local calendars (holidays, contacts' days) belong with Samsung.
+    kind == SyncKind.SAMSUNG || accountName == SAMSUNG_HOLIDAY_ACCOUNT || accountName == SAMSUNG_BIRTHDAY_ACCOUNT -> CalendarCategory.SAMSUNG
+    kind == SyncKind.DEVICE -> CalendarCategory.DEVICE
+    kind == SyncKind.GOOGLE -> CalendarCategory.GOOGLE
+    else -> CalendarCategory.OTHER
 }
 
 /** OLO's starting choice before the user touches a box: everything on except holiday copies (OLO draws its own Korean holidays). */
@@ -128,9 +131,8 @@ fun buildCalendarTree(
     val calendarOrder = compareBy<CalendarInfo>(
         { !it.writable && n(it) == 0 }, { !it.isPrimary }, { -n(it) }, { it.name.lowercase() },
     )
-    val bridged = mainSection.isNotEmpty()
     return calendars.filter { it.id !in mainSection }
-        .groupBy { c -> c.category().let { if (bridged && it == CalendarCategory.MINE) CalendarCategory.OTHER else it } }
+        .groupBy { it.category() }
         .toSortedMap(compareBy { it.ordinal }).map { (cat, inCat) ->
         val accounts = inCat.groupBy { it.accountType to it.accountName }.map { (k, cals) ->
             val sorted = cals.sortedWith(calendarOrder)

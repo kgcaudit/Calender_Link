@@ -79,7 +79,7 @@ class ScreenshotTest {
                     val scope = rememberCoroutineScope()
                     val c = remember {
                         val prefs = app.olo.calendar.model.MemoryPreferences()
-                        if (bridged) { prefs.put("bridgeSamsungId", "16"); prefs.put("bridgeGoogleId", "6") }
+                        if (bridged) { prefs.put("bridgeSamsungId", "16"); prefs.put("bridgeGoogleId", "6"); prefs.put("folded", "GENERAL=0") }
                         CalendarController(SampleStore, scope, zone, prefs).also { it.setView(view) }
                     }
                     CalendarScreen(c, startStage = stage, startDrawerOpen = drawer, startSearch = search, startBridgeFor = bridge)

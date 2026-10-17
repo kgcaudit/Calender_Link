@@ -215,44 +215,118 @@ private fun TriState.toggleable(): ToggleableState = when (this) {
     TriState.NONE -> ToggleableState.Off
 }
 
-/** Categories that start folded: things people rarely switch (docs/05 §3.3). */
-private fun CalendarCategory.foldedByDefault() =
-    this == CalendarCategory.HOLIDAYS || this == CalendarCategory.SUBSCRIBED || this == CalendarCategory.OTHER
-
 /**
- * Category → account → calendar (docs/06 §2, plan A): a category is a tinted
- * band, an account a card, its calendars hang from a guide line inside the
- * card. An account with one calendar is one line. Shared by the phone drawer
- * and the wide screen's calendar sheet.
+ * Two top sections (docs/07 §11): "연동 캘린더" — the Samsung ⇄ Google main pair and
+ * the main account's other calendars, open — and "일반 캘린더", folded at first,
+ * split into 내 기기 · Samsung · Google · 기타, each by account. Shared by the
+ * phone drawer and the wide screen's calendar sheet.
  */
 @Composable
 fun CalendarTree(nav: NavActions, horizontal: androidx.compose.ui.unit.Dp = 10.dp) {
     val s = nav.state
     val samsung = s.bridgeSamsung
     val google = s.bridgeGoogle
-    // The main section: the joined pair and the rest of the Google main account (e.g. 가족).
-    val mainRest = if (samsung != null && google != null) {
-        s.calendars.filter { it.accountName == google.accountName && it.accountType == google.accountType && it.id != google.id && !it.isHoliday && it.writable }
+    val bridged = samsung != null && google != null
+    // The linked section: the joined pair and the rest of the Google main account (e.g. 가족).
+    val mainRest = if (bridged) {
+        s.calendars.filter { it.accountName == google!!.accountName && it.accountType == google.accountType && it.id != google.id && !it.isHoliday && it.writable }
     } else emptyList()
-    val mainIds = if (samsung != null && google != null) setOf(samsung.id, google.id) + mainRest.map { it.id } else emptySet()
+    val mainIds = if (bridged) setOf(samsung!!.id, google!!.id) + mainRest.map { it.id } else emptySet()
     val tree = remember(s.calendars, s.eventCounts, s.sync, mainIds) {
         buildCalendarTree(s.calendars, s.eventCounts, s.sync.accountsWithSyncOff, s.sync.accountsNeedingAccess, mainIds)
     }
     val shown = { id: String -> s.calendarsById[id]?.let(s::isShown) ?: false }
-    val allIds = s.calendars.map { it.id }
     Column(Modifier.padding(horizontal = horizontal)) {
         if (!s.sync.masterSyncOn) MasterSyncLine(nav.onEnableMaster)
-        val all = triState(allIds, shown)
+        TopSection("LINKED", "연동 캘린더", mainIds.toList(), foldedByDefault = false, preview = emptyList(), nav = nav, shown = shown) {
+            if (bridged) MainSection(samsung!!, google!!, mainRest, nav, shown) else ConnectInvite(nav)
+        }
+        val general = tree.flatMap { it.calendars }
+        TopSection("GENERAL", "일반 캘린더", general.map { it.id }, foldedByDefault = true, preview = general, nav = nav, shown = shown) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                tree.forEach { group -> SourceGroup(group, nav, shown) }
+            }
+        }
+    }
+}
+
+/** A top section: a tinted band (fold, box for all, name, n/m) over its content. */
+@Composable
+private fun TopSection(
+    key: String,
+    label: String,
+    ids: List<String>,
+    foldedByDefault: Boolean,
+    preview: List<CalendarInfo>,
+    nav: NavActions,
+    shown: (String) -> Boolean,
+    content: @Composable () -> Unit,
+) {
+    val folded = nav.state.settings.folded[key] ?: foldedByDefault
+    val tri = triState(ids, shown)
+    val turn by animateFloatAsState(if (folded) -90f else 0f, tween(OloMotion.Short))
+    Column(Modifier.padding(top = 8.dp)) {
         Row(
-            Modifier.fillMaxWidth().height(OloLayout.TouchTarget).clickable { nav.onShown(allIds, all != TriState.ALL) }.padding(start = 4.dp, end = 10.dp),
+            Modifier.fillMaxWidth().height(OloLayout.TouchTarget)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.shapes.small)
+                .clickable { nav.onFold(key, !folded) }
+                .padding(start = 8.dp, end = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TriStateCheckbox(state = all.toggleable(), onClick = { nav.onShown(allIds, all != TriState.ALL) })
-            Text("전체 캘린더", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Count(allIds.count(shown), allIds.size)
+            Icon(OloIcons.ChevronDown, contentDescription = if (folded) "펼치기" else "접기", modifier = Modifier.size(20.dp).rotate(turn))
+            if (ids.isNotEmpty()) TriStateCheckbox(state = tri.toggleable(), onClick = { nav.onShown(ids, tri != TriState.ALL) })
+            else Spacer(Modifier.width(12.dp))
+            Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            if (folded && preview.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                    preview.filter { shown(it.id) }.take(4).forEach { c -> Box(Modifier.size(8.dp).background(dotColor(c), CircleShape)) }
+                }
+                Spacer(Modifier.width(8.dp))
+            }
+            if (ids.isNotEmpty()) Count(ids.count(shown), ids.size)
         }
-        if (samsung != null && google != null) MainSection(samsung, google, mainRest, nav, shown)
-        tree.forEach { group -> CategorySection(group, nav, shown) }
+        AnimatedVisibility(
+            visible = !folded,
+            enter = expandVertically(tween(OloMotion.Short)) + fadeIn(tween(OloMotion.Short)),
+            exit = shrinkVertically(tween(OloMotion.Short)) + fadeOut(tween(OloMotion.Quick)),
+        ) {
+            Column(Modifier.padding(top = 6.dp)) { content() }
+        }
+    }
+}
+
+/** 내 기기 · Samsung · Google · 기타: a small heading (box for all, n/m) over its account cards. */
+@Composable
+private fun SourceGroup(group: CategoryGroup, nav: NavActions, shown: (String) -> Boolean) {
+    val ids = group.calendars.map { it.id }
+    val tri = triState(ids, shown)
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp).height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+        TriStateCheckbox(state = tri.toggleable(), onClick = { nav.onShown(ids, tri != TriState.ALL) })
+        Text(group.category.label, style = MaterialTheme.typography.labelLarge, color = OloTone.accent, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        Count(ids.count(shown), ids.size)
+        Spacer(Modifier.width(10.dp))
+    }
+    Column(Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        group.accounts.forEach { AccountCard(it, nav, shown) }
+    }
+}
+
+/** Nothing linked yet: invite the Samsung ⇄ Google main connection. */
+@Composable
+private fun ConnectInvite(nav: NavActions) {
+    val samsung = nav.state.calendars.firstOrNull { it.kind == SyncKind.SAMSUNG && it.writable }
+    Surface(color = OloTone.container, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().then(if (samsung != null) Modifier.clickable { nav.onMove(samsung.id) } else Modifier).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("아직 연동된 캘린더가 없습니다", style = MaterialTheme.typography.titleSmall)
+            Text(
+                if (samsung != null) "${samsung.name}을 구글 메인 계정과 연결하면 갤럭시와 아이폰이 같은 일정을 봅니다 ›"
+                else "휴대폰에 Samsung Calendar가 없습니다.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -271,10 +345,6 @@ private fun MainSection(samsung: CalendarInfo, google: CalendarInfo, rest: List<
     val issue = google.accountName in s.sync.accountsWithSyncOff || google.accountName in s.sync.accountsNeedingAccess ||
         (s.bridgeReport?.heldDeletes ?: 0) > 0 || s.bridgeDuplicates > 0
     val green = if (cs.background.luminanceIsDarkPublic()) Color(0xFF8FD1AE) else Color(0xFF2F6B4F)
-    Text(
-        "메인 캘린더", style = MaterialTheme.typography.labelLarge, color = OloTone.accent,
-        modifier = Modifier.padding(start = 8.dp, top = 10.dp, bottom = 6.dp),
-    )
     Surface(
         color = cs.surfaceContainerLowest,
         shape = MaterialTheme.shapes.medium,
@@ -342,46 +412,6 @@ private fun MasterSyncLine(onEnable: () -> Unit) {
     }
 }
 
-@Composable
-private fun CategorySection(group: CategoryGroup, nav: NavActions, shown: (String) -> Boolean) {
-    val folded = nav.state.settings.folded[group.key] ?: group.category.foldedByDefault()
-    val ids = group.calendars.map { it.id }
-    val tri = triState(ids, shown)
-    val turn by animateFloatAsState(if (folded) -90f else 0f, tween(OloMotion.Short))
-    Column(Modifier.padding(top = 8.dp)) {
-        Row(
-            Modifier.fillMaxWidth().height(OloLayout.TouchTarget)
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.shapes.small)
-                .clickable { nav.onFold(group.key, !folded) }
-                .padding(start = 8.dp, end = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(OloIcons.ChevronDown, contentDescription = if (folded) "펼치기" else "접기", modifier = Modifier.size(20.dp).rotate(turn))
-            TriStateCheckbox(state = tri.toggleable(), onClick = { nav.onShown(ids, tri != TriState.ALL) })
-            Text(group.category.label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            if (folded) {
-                // Folded: how many are on, and their colours.
-                Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                    group.calendars.take(4).forEach { c ->
-                        Box(Modifier.size(8.dp).background(dotColor(c).copy(alpha = if (shown(c.id)) 1f else 0.25f), CircleShape))
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
-            }
-            Count(ids.count(shown), ids.size)
-        }
-        AnimatedVisibility(
-            visible = !folded,
-            enter = expandVertically(tween(OloMotion.Short)) + fadeIn(tween(OloMotion.Short)),
-            exit = shrinkVertically(tween(OloMotion.Short)) + fadeOut(tween(OloMotion.Quick)),
-        ) {
-            Column(Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                group.accounts.forEach { AccountCard(it, nav, shown) }
-            }
-        }
-    }
-}
-
 /** The account's mark: a small tile in its service's hue, as Explorer marks folders. */
 @Composable
 private fun AccountTile(c: CalendarInfo) {
@@ -439,7 +469,7 @@ private fun AccountCard(account: AccountGroup, nav: NavActions, shown: (String) 
                 val ids = account.calendars.map { it.id }
                 val tri = triState(ids, shown)
                 Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    AccountTile(account.calendars.first())
+                    AccountTile(account.calendars.firstOrNull { !it.isHoliday } ?: account.calendars.first())
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(account.title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
