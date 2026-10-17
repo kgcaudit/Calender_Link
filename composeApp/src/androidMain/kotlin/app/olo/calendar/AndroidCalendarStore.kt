@@ -332,7 +332,7 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         Events._ID, Events.TITLE, Events.EVENT_LOCATION, Events.DESCRIPTION, Events.DTSTART, Events.DTEND,
         Events.DURATION, Events.EVENT_TIMEZONE, Events.EVENT_END_TIMEZONE, Events.ALL_DAY, Events.RRULE,
         Events.RDATE, Events.EXRULE, Events.EXDATE, Events.ORIGINAL_ID, Events.ORIGINAL_INSTANCE_TIME,
-        Events.STATUS, Events.AVAILABILITY, Events.ACCESS_LEVEL, Events._SYNC_ID,
+        Events.STATUS, Events.AVAILABILITY, Events.ACCESS_LEVEL, Events._SYNC_ID, Events.EVENT_COLOR,
     )
 
     private fun sourceRows(calendarId: String, deleted: Boolean = false): List<Map<String, Any?>> =
@@ -451,6 +451,8 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             put(Events.EVENT_TIMEZONE, if (allDay) "UTC" else (r[Events.EVENT_TIMEZONE] as String?) ?: zone.id)
             (r[Events.EVENT_END_TIMEZONE] as String?)?.takeIf { !allDay }?.let { put(Events.EVENT_END_TIMEZONE, it) }
             (r[Events.AVAILABILITY] as Long?)?.let { put(Events.AVAILABILITY, it) }
+            // The event's own colour (Samsung's pink birthday, say), so a copy looks like the original.
+            (r[Events.EVENT_COLOR] as Long?)?.takeIf { it != 0L }?.let { put(Events.EVENT_COLOR, it.toInt()) }
             (r[Events.ACCESS_LEVEL] as Long?)?.let { put(Events.ACCESS_LEVEL, it) }
             if (keepRule && r.repeats()) {
                 putAny(Events.RRULE, r[Events.RRULE])

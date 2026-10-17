@@ -9,6 +9,7 @@ import app.olo.calendar.model.decodeLinks
 import app.olo.calendar.model.encodeLinks
 import app.olo.calendar.model.planBridge
 import app.olo.calendar.model.planDedupe
+import app.olo.calendar.model.dedupeTitles
 import app.olo.calendar.model.decodeMap
 import app.olo.calendar.model.encodeMap
 import kotlinx.coroutines.sync.Mutex
@@ -93,10 +94,12 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
      * deletion took and can still be brought back.
      */
     suspend fun recoverable(config: BridgeConfig): List<BridgeItem> {
-        val live = (store.bridgeItems(config.samsungCalendarId) + store.bridgeItems(config.googleCalendarId)).map { it.fingerprint }.toSet()
+        // Anything that already looks like a live event (same title, start, end, rule) is
+        // not brought back: it was restored another way (the Samsung trash, say).
+        val live = (store.bridgeItems(config.samsungCalendarId) + store.bridgeItems(config.googleCalendarId)).map { it.twinKey }.toSet()
         return (store.bridgeDeleted(config.samsungCalendarId) + store.bridgeDeleted(config.googleCalendarId))
-            .filter { it.fingerprint !in live }
-            .distinctBy { it.fingerprint }
+            .filter { it.twinKey !in live }
+            .distinctBy { it.twinKey }
     }
 
     /** Brings them back into Samsung Calendar (the home calendar); a pass then copies them to Google. */
@@ -210,6 +213,13 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     }
 
     /** Exact twins inside each of the two calendars (left by overlapping passes). */
+    /** Titles of the twins that a clean-up would remove, per side. */
+    suspend fun duplicateTitles(config: BridgeConfig): Pair<List<String>, List<String>> {
+        val paired = links.flatMap { listOf(it.samsungId, it.googleId) }.toSet()
+        return dedupeTitles(store.bridgeItems(config.samsungCalendarId), paired) to
+            dedupeTitles(store.bridgeItems(config.googleCalendarId), paired)
+    }
+
     suspend fun findDuplicates(config: BridgeConfig): Pair<Int, Int> {
         val paired = links.flatMap { listOf(it.samsungId, it.googleId) }.toSet()
         return planDedupe(store.bridgeItems(config.samsungCalendarId), paired).size to

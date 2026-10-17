@@ -67,6 +67,8 @@ data class CalendarUiState(
     val bridgeReport: BridgeReport? = null,
     /** done / total while a bridge pass runs; null otherwise. */
     val bridgeProgress: Pair<Int, Int>? = null,
+    /** Twins found after the last pass (Samsung + Google), shown on the main card. */
+    val bridgeDuplicates: Int = 0,
 ) {
     val bridgeSamsung: CalendarInfo? get() = settings.bridgeSamsungId?.let { calendarsById[it] }
     val bridgeGoogle: CalendarInfo? get() = settings.bridgeGoogleId?.let { calendarsById[it] }
@@ -100,7 +102,7 @@ data class CalendarUiState(
             stranded.forEach { (c, n) -> add(SyncAction.Stranded(c, n)) }
         }
 
-    val needsSyncAttention: Boolean get() = syncActions.isNotEmpty() || (bridgeReport?.heldDeletes ?: 0) > 0
+    val needsSyncAttention: Boolean get() = syncActions.isNotEmpty() || (bridgeReport?.heldDeletes ?: 0) > 0 || bridgeDuplicates > 0
 
     fun isShown(c: CalendarInfo): Boolean = settings.isShown(c)
 
@@ -178,13 +180,16 @@ class CalendarController(
                     occurrences = shownOf(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
                 )
             }
+            val d = runCatching { bridge.findDuplicates(config) }.getOrNull()
+            if (d != null) _state.update { it.copy(bridgeDuplicates = d.first + d.second) }
             if (r.getOrNull()?.let { it.toGoogle + it.toSamsung + it.deleted > 0 } == true) store.requestSync()
             done(r)
         }
     }
 
     /** Exact twins in (Samsung, Google), e.g. left by the overlapping passes of 0.8.0–0.8.1. */
-    suspend fun bridgeDuplicates(): Pair<Int, Int> = bridgeConfig()?.let { bridge.findDuplicates(it) } ?: (0 to 0)
+    suspend fun bridgeDuplicates(): Pair<List<String>, List<String>> =
+        bridgeConfig()?.let { bridge.duplicateTitles(it) } ?: (emptyList<String>() to emptyList())
 
     fun removeBridgeDuplicates(done: (Result<Int>) -> Unit = {}) {
         val config = bridgeConfig() ?: return
@@ -194,6 +199,7 @@ class CalendarController(
             _state.update {
                 it.copy(
                     bridgeProgress = null,
+                    bridgeDuplicates = 0,
                     bridgeLinkedGoogle = bridge.linkedGoogleIds(),
                     bridgeReport = bridge.lastReport ?: it.bridgeReport,
                     occurrences = shownOf(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),

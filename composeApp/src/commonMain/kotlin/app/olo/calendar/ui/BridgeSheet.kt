@@ -192,20 +192,22 @@ private fun Connected(
 ) {
     val google = state.bridgeGoogle
     val r: BridgeReport? = state.bridgeReport
-    var dupes by remember { mutableStateOf(0 to 0) }
+    var dupes by remember { mutableStateOf(emptyList<String>() to emptyList<String>()) }
     LaunchedEffect(r?.atMillis, state.bridgeProgress == null) {
-        if (state.bridgeProgress == null) dupes = runCatching { controller.bridgeDuplicates() }.getOrDefault(0 to 0)
+        if (state.bridgeProgress == null) dupes = runCatching { controller.bridgeDuplicates() }.getOrDefault(emptyList<String>() to emptyList())
     }
-    if (dupes.first + dupes.second > 0) {
+    val dupeCount = dupes.first.size + dupes.second.size
+    if (dupeCount > 0) {
         Surface(color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f), shape = MaterialTheme.shapes.small) {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("똑같은 일정이 두 벌 있습니다", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "${state.bridgeSamsung?.name ?: "Samsung Calendar"} ${dupes.first}개 · ${google?.accountName ?: "구글"} ${dupes.second}개. " +
-                        "제목·시간·반복·알림·장소·메모까지 모두 같은 일정만 골라, 한 벌만 남기고 지웁니다.",
+                    "${state.bridgeSamsung?.name ?: "Samsung Calendar"} ${dupes.first.size}개 · ${google?.accountName ?: "구글"} ${dupes.second.size}개: " +
+                        (dupes.first + dupes.second).distinct().take(8).joinToString(", ") +
+                        ". 제목·시작·끝·반복이 같은 일정끼리 묶어, 알림·메모가 가장 많이 남은 한 벌만 두고 지웁니다.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Row { OloButton("중복 ${dupes.first + dupes.second}개 정리", { controller.removeBridgeDuplicates { dupes = 0 to 0 } }, enabled = state.bridgeProgress == null) }
+                Row { OloButton("중복 ${dupeCount}개 정리", { controller.removeBridgeDuplicates { dupes = emptyList<String>() to emptyList() } }, enabled = state.bridgeProgress == null) }
             }
         }
     }

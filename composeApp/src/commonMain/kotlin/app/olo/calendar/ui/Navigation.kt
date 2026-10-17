@@ -269,7 +269,7 @@ private fun MainSection(samsung: CalendarInfo, google: CalendarInfo, rest: List<
     val on = shown(samsung.id) || shown(google.id)
     val n = s.eventCounts[samsung.id] ?: 0
     val issue = google.accountName in s.sync.accountsWithSyncOff || google.accountName in s.sync.accountsNeedingAccess ||
-        (s.bridgeReport?.heldDeletes ?: 0) > 0
+        (s.bridgeReport?.heldDeletes ?: 0) > 0 || s.bridgeDuplicates > 0
     val green = if (cs.background.luminanceIsDarkPublic()) Color(0xFF8FD1AE) else Color(0xFF2F6B4F)
     Text(
         "메인 캘린더", style = MaterialTheme.typography.labelLarge, color = OloTone.accent,
@@ -299,6 +299,7 @@ private fun MainSection(samsung: CalendarInfo, google: CalendarInfo, rest: List<
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                         val (label, color) = when {
                             s.bridgeProgress != null -> "맞추는 중" to green
+                            s.bridgeDuplicates > 0 -> "중복 ${s.bridgeDuplicates}개" to cs.error
                             issue -> "확인 필요" to cs.error
                             else -> "연결됨" to green
                         }

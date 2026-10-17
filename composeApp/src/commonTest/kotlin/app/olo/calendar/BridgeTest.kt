@@ -136,6 +136,14 @@ class BridgeTest {
     }
 
     @Test
+    fun aRestoredCopyWithoutRemindersIsStillATwinAndTheRicherOneStays() {
+        // 현정탄신일: the Samsung-trash original (with reminders) and OLO's restored copy (none).
+        val original = BridgeItem("50", f("현정탄신일", rem = listOf(1440)))
+        val copy = BridgeItem("900", f("현정탄신일", rem = emptyList()))
+        assertEquals(listOf("900"), app.olo.calendar.model.planDedupe(listOf(copy, original), setOf("900")))
+    }
+
+    @Test
     fun anUnpairedTwinOfAPairedEventIsNotCopied() {
         val a = item("s1", "치과"); val g = item("g1", "치과")
         val p = planBridge(listOf(a, item("s9", "치과")), listOf(g, item("g9", "치과")), listOf(BridgeLink("s1", "g1", a.fingerprint, g.fingerprint)))

@@ -53,6 +53,16 @@ data class BridgeItem(val id: String, val fields: BridgeFields, val synced: Bool
 
     /** What a person would call "the same event" when two calendars already hold copies. */
     val matchKey: String = "${fields.title.trim().lowercase()}|${fields.allDay}|${fields.startMillis}"
+
+    /**
+     * Two series in one calendar that are the same event to a person: same title,
+     * start, end and repeat rule, whatever their reminders, notes or colour (a
+     * copy restored from a deletion record has lost those).
+     */
+    val twinKey: String = "$matchKey|${fields.endMillis}|${normaliseRrule(fields.rrule)}"
+
+    /** How much a copy carries besides the essentials: the richer twin is the one kept. */
+    val richness: Int get() = fields.reminderMinutes.size * 100 + fields.description.trim().length + fields.location.trim().length + fields.exceptions.size * 10
 }
 
 fun normaliseRrule(rule: String): String =
@@ -215,8 +225,8 @@ fun planBridge(
     // Unpaired series: pair equal-looking copies first (no duplicates on the first run), then copy the rest.
     // An unpaired exact twin of an event that is already paired on its own side is a
     // duplicate (two passes that overlapped, a double import): it is never copied across.
-    val pairedSPrints = linkedS.mapNotNull { s[it]?.fingerprint }.toSet()
-    val pairedGPrints = linkedG.mapNotNull { g[it]?.fingerprint }.toSet()
+    val pairedSPrints = linkedS.mapNotNull { s[it]?.twinKey }.toSet()
+    val pairedGPrints = linkedG.mapNotNull { g[it]?.twinKey }.toSet()
     var duplicates = 0
     var unsupported = 0
     val freeG = google.filter { it.id !in linkedG }.groupBy { it.matchKey }.mapValues { it.value.toMutableList() }
@@ -229,7 +239,7 @@ fun planBridge(
                 usedG += gi.id
                 ops += if (gi.fingerprint == si.fingerprint) BridgeOp.Agree(si.id, gi.id) else BridgeOp.UpdateGoogle(si.id, gi.id)
             }
-            si.fingerprint in pairedSPrints -> duplicates++
+            si.twinKey in pairedSPrints -> duplicates++
             !googleCanHold(si.fields) -> unsupported++
             refused[si.id] == si.fingerprint -> unsupported++
             else -> ops += BridgeOp.CreateInGoogle(si.id)
@@ -237,7 +247,7 @@ fun planBridge(
     }
     for (gi in google) {
         if (gi.id in linkedG || gi.id in usedG) continue
-        if (gi.fingerprint in pairedGPrints) { duplicates++; continue }
+        if (gi.twinKey in pairedGPrints) { duplicates++; continue }
         ops += BridgeOp.CreateInSamsung(gi.id)
     }
 
@@ -253,11 +263,20 @@ fun planBridge(
  * which is the person's original rather than a copy.
  */
 fun planDedupe(items: List<BridgeItem>, paired: Set<String>): List<String> =
-    items.groupBy { it.fingerprint }.values.filter { it.size > 1 }.flatMap { group ->
-        val byAge = compareBy<BridgeItem> { it.id.toLongOrNull() ?: Long.MAX_VALUE }
-        val keep = group.filter { it.id in paired }.minWithOrNull(byAge) ?: group.minWith(byAge)
+    items.groupBy { it.twinKey }.values.filter { it.size > 1 }.flatMap { group ->
+        // Keep the richest copy (reminders, notes, place), then a paired one, then the oldest.
+        val order = compareByDescending<BridgeItem> { it.richness }
+            .thenBy { if (it.id in paired) 0 else 1 }
+            .thenBy { it.id.toLongOrNull() ?: Long.MAX_VALUE }
+        val keep = group.minWith(order)
         group.filter { it !== keep }.map { it.id }
     }
+
+/** Twins in one calendar as titles, for the confirmation card. */
+fun dedupeTitles(items: List<BridgeItem>, paired: Set<String>): List<String> {
+    val gone = planDedupe(items, paired).toSet()
+    return items.filter { it.id in gone }.map { it.fields.title }
+}
 
 /**
  * EXDATE as Android stores it ("20261020T010000Z,…", "TZID=Asia/Seoul;20261020T100000",
