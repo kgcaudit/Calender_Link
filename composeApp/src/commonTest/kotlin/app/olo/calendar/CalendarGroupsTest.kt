@@ -60,9 +60,9 @@ class CalendarGroupsTest {
     fun groupedBySourceThenAccount() {
         assertEquals(listOf(CalendarCategory.DEVICE, CalendarCategory.SAMSUNG, CalendarCategory.GOOGLE, CalendarCategory.OTHER), tree.map { it.category })
         val ids = { c: CalendarCategory -> tree.first { it.category == c }.calendars.map { it.id }.toSet() }
-        assertEquals(setOf("10"), ids(CalendarCategory.DEVICE))
-        // Samsung account plus Samsung's own holiday and contacts calendars.
-        assertEquals(setOf("16", "11", "12", "13", "14"), ids(CalendarCategory.SAMSUNG))
+        // The phone's own calendar plus Samsung's built-in ones, as Samsung Calendar's "내 폰" shows them.
+        assertEquals(setOf("10", "11", "12", "13", "14"), ids(CalendarCategory.DEVICE))
+        assertEquals(setOf("16"), ids(CalendarCategory.SAMSUNG))
         // Google holidays and subscriptions stay inside their accounts.
         assertEquals(setOf("1", "2", "3", "4", "5", "6", "7", "8", "9"), ids(CalendarCategory.GOOGLE))
         assertEquals(setOf("15"), ids(CalendarCategory.OTHER))
@@ -77,7 +77,7 @@ class CalendarGroupsTest {
         assertEquals(AccountStatus.SYNCING, google.first { it.title == "hazakuqa@gmail.com" }.status)
         val samsung = tree.first { it.category == CalendarCategory.SAMSUNG }.accounts
         assertEquals(AccountStatus.DEVICE_ONLY, samsung.first { it.calendars.any { c -> c.id == "16" } }.status)
-        assertEquals("이 기기", tree.first { it.category == CalendarCategory.DEVICE }.accounts.single().title)
+        assertEquals(listOf("이 기기", "공휴일·기념일", "연락처"), tree.first { it.category == CalendarCategory.DEVICE }.accounts.map { it.title }.sortedBy { listOf("이 기기", "공휴일·기념일", "연락처").indexOf(it) })
     }
 
     @Test
@@ -117,8 +117,22 @@ class CalendarGroupsTest {
         val t = buildCalendarTree(cals, counts, emptyList(), mainSection = setOf("16", "6", "7"))
         // sutest's holiday and game list stay in the Google group; the pair and 가족 are gone from it.
         assertEquals(setOf("1", "2", "3", "4", "5", "8", "9"), t.first { it.category == CalendarCategory.GOOGLE }.calendars.map { it.id }.toSet())
-        assertEquals(setOf("11", "12", "13", "14"), t.first { it.category == CalendarCategory.SAMSUNG }.calendars.map { it.id }.toSet())
+        assertTrue(t.none { it.category == CalendarCategory.SAMSUNG })
+        assertEquals(setOf("10", "11", "12", "13", "14"), t.first { it.category == CalendarCategory.DEVICE }.calendars.map { it.id }.toSet())
         assertTrue(t.flatMap { it.calendars }.none { it.id in setOf("16", "6", "7") })
+    }
+
+    @Test
+    fun onlyDaysOffAreHolidayCalendars() {
+        val byId = cals.associateBy { it.id }
+        // 공휴일 reddens days; 법정기념일 and 절기 are ordinary read-only calendars (국군의 날 is not a day off).
+        assertTrue(byId.getValue("12").isHoliday)
+        assertFalse(byId.getValue("13").isHoliday)
+        assertFalse(byId.getValue("14").isHoliday)
+        // Samsung's built-in calendars start off, as in Samsung Calendar; ticking one shows it.
+        val st = AppSettings()
+        listOf("11", "12", "13", "14").forEach { assertFalse(st.isShown(byId.getValue(it))) }
+        assertTrue(st.copy(visibility = mapOf("13" to true)).isShown(byId.getValue("13")))
     }
 
     @Test

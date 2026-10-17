@@ -85,6 +85,7 @@ import app.olo.calendar.model.TriState
 import app.olo.calendar.model.ViewMode
 import app.olo.calendar.model.buildCalendarTree
 import app.olo.calendar.model.triState
+import app.olo.calendar.model.isSamsungBuiltIn
 
 class NavActions(
     val state: CalendarUiState,
@@ -535,7 +536,11 @@ private fun AccountCard(account: AccountGroup, nav: NavActions, shown: (String) 
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box {
-                        AccountTile(account.calendars.firstOrNull { !it.isHoliday } ?: account.calendars.first())
+                        // Samsung's 공휴일·기념일 account wears the red 휴 tile; others their service's.
+                        AccountTile(
+                            account.calendars.firstOrNull { it.isHoliday }?.takeIf { it.isSamsungBuiltIn }
+                                ?: account.calendars.firstOrNull { !it.isHoliday } ?: account.calendars.first(),
+                        )
                         Box(
                             Modifier.align(Alignment.BottomEnd).offset(x = 5.dp, y = 5.dp).size(16.dp)
                                 .background(cs.surfaceContainerLowest, CircleShape)

@@ -55,10 +55,12 @@ class ScreenshotTest {
         // The whole drawer at once, down to the sync cards.
         render("month-drawer-tall", dark = false, drawer = true, height = 5200)
         render("month-drawer-dark", dark = true, drawer = true)
+        // 공휴일 ticked: 개천절 and 한글날 as rose bars in their cells.
+        render("month-holidays", dark = false, shownExtra = "12=1")
         render("bridge-sheet", dark = false, bridge = "16")
         render("month-drawer-bridged", dark = false, drawer = true, bridged = true, height = 3600)
-        // 일반 캘린더 open, 내 기기 folded by its heading, the Samsung holiday account by its tile.
-        render("month-drawer-folded", dark = false, drawer = true, folded = "GENERAL=0,SAMSUNG/LOCAL/local.samsungholiday=1,SRC/DEVICE=1", height = 3600)
+        // 일반 캘린더 open, Google folded by its heading, Samsung's holiday account (in 내 기기) by its tile.
+        render("month-drawer-folded", dark = false, drawer = true, folded = "GENERAL=0,DEVICE/LOCAL/local.samsungholiday=1,SRC/GOOGLE=1", height = 3600)
         render("view-agenda-dark", dark = true, view = ViewMode.AGENDA)
         // Halfway through a swipe to November: the page follows the finger.
         render("month-swipe", dark = false, swipe = 0.45f)
@@ -76,7 +78,7 @@ class ScreenshotTest {
     }
 
     private fun render(
-        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, bridged: Boolean = false, folded: String? = null, scrubAt: Float? = null, settingsOpen: Boolean = false, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
+        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, bridged: Boolean = false, folded: String? = null, scrubAt: Float? = null, settingsOpen: Boolean = false, shownExtra: String? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
         view: ViewMode = ViewMode.MONTH,
     ) {
         val scene = ImageComposeScene(width = width, height = height, density = Density(density)) {
@@ -88,6 +90,7 @@ class ScreenshotTest {
                         val prefs = app.olo.calendar.model.MemoryPreferences()
                         if (bridged) { prefs.put("bridgeSamsungId", "16"); prefs.put("bridgeGoogleId", "6"); prefs.put("folded", "GENERAL=0") }
                         if (folded != null) prefs.put("folded", folded)
+                        if (shownExtra != null) prefs.put("visibility", shownExtra)
                         CalendarController(SampleStore, scope, zone, prefs).also { it.setView(view) }
                     }
                     CalendarScreen(c, startStage = stage, startDrawerOpen = drawer, startSearch = search, startBridgeFor = bridge, startSettings = settingsOpen)
@@ -177,6 +180,8 @@ private object SampleStore : CalendarStore {
         allDay("y", "세금계산서 발행", d(23)), allDay("z", "연차휴무", d(23)),
         allDay("aa", "대한항공 엔진정비공장 정기감사", d(26), d(30)), allDay("ab", "지도 감사", d(26), d(30)),
         allDay("ac", "hj 일본 여행", d(31), LocalDate(2026, 11, 1)),
+        // Samsung's 공휴일 calendar (off unless ticked).
+        allDay("hol1", "개천절", d(3)).copy(calendarId = "12"), allDay("hol2", "한글날", d(9)).copy(calendarId = "12"),
     )
 
     override suspend fun calendars() = cals

@@ -52,30 +52,41 @@ fun triState(ids: Collection<String>, shown: (String) -> Boolean): TriState {
 
 private const val SAMSUNG_HOLIDAY_ACCOUNT = "local.samsungholiday"
 private const val SAMSUNG_BIRTHDAY_ACCOUNT = "local.samsungbirthday"
-private val holidayName = Regex("(휴일|공휴일|법정기념일|절기|세시풍속|holiday)", RegexOption.IGNORE_CASE)
+// Days off only: 법정기념일 (국군의 날, …) and 절기 (입춘, …) are not red days.
+private val holidayName = Regex("(휴일|holiday)", RegexOption.IGNORE_CASE)
 
 /**
- * Public-holiday calendars: Google's #holiday calendars and Samsung's local
- * holiday account. Their events become red day names rather than event bars.
+ * Public-holiday calendars: Google's #holiday calendars, Samsung's "공휴일"
+ * and other read-only "…휴일" calendars. Their days turn red and their names
+ * show as rose bars (docs/06 §7). Samsung's 법정기념일 and 절기와 세시풍속 sit in
+ * the same local account but are ordinary read-only calendars (0.9.5).
  */
 fun looksLikeHolidayCalendar(ownerOrId: String?, accountName: String, name: String, writable: Boolean): Boolean =
     isGoogleHolidayCalendarId(ownerOrId) ||
-        accountName == SAMSUNG_HOLIDAY_ACCOUNT ||
         (!writable && holidayName.containsMatchIn(name))
 
+/** Calendars Samsung puts on every phone (holidays, 기념일, 절기, contacts' days): 내 기기, off until chosen. */
+val CalendarInfo.isSamsungBuiltIn: Boolean
+    get() = accountName == SAMSUNG_HOLIDAY_ACCOUNT || accountName == SAMSUNG_BIRTHDAY_ACCOUNT
+
 fun CalendarInfo.category(): CalendarCategory = when {
-    // Samsung's own local calendars (holidays, contacts' days) belong with Samsung.
-    kind == SyncKind.SAMSUNG || accountName == SAMSUNG_HOLIDAY_ACCOUNT || accountName == SAMSUNG_BIRTHDAY_ACCOUNT -> CalendarCategory.SAMSUNG
+    // Samsung's built-in calendars live on the phone, as Samsung Calendar's "내 폰" shows them.
+    isSamsungBuiltIn -> CalendarCategory.DEVICE
+    kind == SyncKind.SAMSUNG -> CalendarCategory.SAMSUNG
     kind == SyncKind.DEVICE -> CalendarCategory.DEVICE
     kind == SyncKind.GOOGLE -> CalendarCategory.GOOGLE
     else -> CalendarCategory.OTHER
 }
 
-/** OLO's starting choice before the user touches a box: everything on except holiday copies (OLO draws its own Korean holidays). */
-fun CalendarInfo.shownByDefault(): Boolean = !isHoliday
+/**
+ * OLO's starting choice before the user touches a box: everything on except
+ * holiday copies (OLO draws its own Korean holidays) and Samsung's built-in
+ * calendars, which Samsung Calendar also leaves off.
+ */
+fun CalendarInfo.shownByDefault(): Boolean = !isHoliday && !isSamsungBuiltIn
 
 fun accountTitle(c: CalendarInfo): String = when (c.accountName) {
-    SAMSUNG_HOLIDAY_ACCOUNT -> "삼성 공휴일"
+    SAMSUNG_HOLIDAY_ACCOUNT -> "공휴일·기념일"
     SAMSUNG_BIRTHDAY_ACCOUNT -> "연락처"
     else -> when (c.kind) {
         SyncKind.DEVICE -> "이 기기"
@@ -144,7 +155,8 @@ fun buildCalendarTree(
                 calendars = sorted,
             )
         }.sortedWith(
-            compareBy<AccountGroup>({ g -> g.calendars.none { it.isPrimary } }, { g -> -g.calendars.sumOf(n) }, { it.title.lowercase() }),
+            // The person's own accounts before Samsung's built-in ones (내 캘린더 first, as in Samsung Calendar).
+            compareBy<AccountGroup>({ g -> g.calendars.first().isSamsungBuiltIn }, { g -> g.calendars.none { it.isPrimary } }, { g -> -g.calendars.sumOf(n) }, { it.title.lowercase() }),
         )
         CategoryGroup(cat, accounts)
     }

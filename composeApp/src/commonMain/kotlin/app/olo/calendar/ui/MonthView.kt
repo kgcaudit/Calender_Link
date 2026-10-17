@@ -21,6 +21,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import app.olo.calendar.design.OloMotion
 import app.olo.calendar.design.OloTone
+import app.olo.calendar.design.OloHue
+import app.olo.calendar.design.argb
 import androidx.compose.ui.draw.drawBehind
 import app.olo.calendar.model.YearMonth
 import app.olo.calendar.model.weekStartOf
@@ -138,6 +140,16 @@ enum class MonthStage { FULL, LINES, WEEK }
 internal fun holidayNames(day: LocalDate, occurrences: List<Occurrence>, holidayCalendars: Set<String>): List<String> =
     (KoreanHolidays.on(day).map { it.name } + occurrences.on(day).filter { it.calendarId in holidayCalendars }.map { it.title })
         .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+
+/**
+ * What the month grid draws as bars. A holiday calendar the person turned on
+ * (Samsung's 공휴일, Google's 대한민국의 휴일) shows its names as rose bars, as
+ * Samsung Calendar does — so ticking it makes 크리스마스 appear in the cell, not
+ * only a red number (docs/06 §7). Off, OLO's own list still reddens the day.
+ */
+internal fun gridEvents(occurrences: List<Occurrence>, holidayCalendars: Set<String>): List<Occurrence> =
+    occurrences.map { if (it.calendarId in holidayCalendars) it.copy(colorArgb = OloHue.AUDIO.argb) else it }
+        .distinctBy { if (it.calendarId in holidayCalendars) "h|${it.firstDay}|${it.title.trim()}" else it.eventId + "@" + it.begin }
 
 /**
  * Month view. Wide: grid beside the selected day. Phone: three stages driven by a
@@ -334,7 +346,7 @@ private fun WeekPages(state: CalendarUiState, controller: CalendarController, ho
         Row(Modifier.fillMaxWidth().height(OloLayout.LinesRow).padding(horizontal = OloLayout.GridMarginCompact)) {
             WeekRow(
                 week = week, month = month, state = state,
-                events = state.occurrences.filter { it.calendarId !in holidayCalendars },
+                events = gridEvents(state.occurrences, holidayCalendars),
                 holidayCalendars = holidayCalendars, onSelect = onSelect, textAlpha = 0f,
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
@@ -383,7 +395,7 @@ internal fun MonthGrid(
 ) {
     val days = monthGrid(month, state.settings.weekStart)
     val weeks = days.chunked(7)
-    val visibleEvents = state.occurrences.filter { it.calendarId !in holidayCalendars }
+    val visibleEvents = gridEvents(state.occurrences, holidayCalendars)
     val selectedHere = state.selected in days && YearMonth.of(state.selected) == month
     // A neighbour page keeps the same row open as the selected one: the week holding the same weekday-and-number, else the first.
     val selectedWeek = weeks.indexOfFirst { state.selected in it }.coerceAtLeast(0)
