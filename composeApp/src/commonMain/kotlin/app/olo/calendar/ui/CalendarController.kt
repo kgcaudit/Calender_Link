@@ -177,6 +177,28 @@ class CalendarController(
         }
     }
 
+    /** Exact twins in (Samsung, Google), e.g. left by the overlapping passes of 0.8.0–0.8.1. */
+    suspend fun bridgeDuplicates(): Pair<Int, Int> = bridgeConfig()?.let { bridge.findDuplicates(it) } ?: (0 to 0)
+
+    fun removeBridgeDuplicates(done: (Result<Int>) -> Unit = {}) {
+        val config = bridgeConfig() ?: return
+        scope.launch {
+            _state.update { it.copy(bridgeProgress = 0 to 0) }
+            val r = runCatching { bridge.removeDuplicates(config) }
+            _state.update {
+                it.copy(
+                    bridgeProgress = null,
+                    bridgeLinkedGoogle = bridge.linkedGoogleIds(),
+                    bridgeReport = bridge.lastReport ?: it.bridgeReport,
+                    occurrences = shownOf(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
+                )
+            }
+            store.requestSync()
+            reload()
+            done(r)
+        }
+    }
+
     /** Stops the bridge; both calendars keep every event they hold. */
     fun stopBridge() {
         bridge.forget()

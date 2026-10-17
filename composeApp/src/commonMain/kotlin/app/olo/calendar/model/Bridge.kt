@@ -117,6 +117,8 @@ data class BridgePlan(
     val heldDeletes: Int,
     /** Links whose both sides are gone: dropped. */
     val dropped: List<BridgeLink>,
+    /** Unpaired exact twins of an already paired event on the same side: not copied again. */
+    val duplicates: Int = 0,
 ) {
     fun count(kind: (BridgeOp) -> Boolean) = ops.count(kind)
     val toGoogle get() = count { it is BridgeOp.CreateInGoogle || it is BridgeOp.UpdateGoogle }
@@ -170,27 +172,47 @@ fun planBridge(
     }
 
     // Unpaired series: pair equal-looking copies first (no duplicates on the first run), then copy the rest.
+    // An unpaired exact twin of an event that is already paired on its own side is a
+    // duplicate (two passes that overlapped, a double import): it is never copied across.
+    val pairedSPrints = linkedS.mapNotNull { s[it]?.fingerprint }.toSet()
+    val pairedGPrints = linkedG.mapNotNull { g[it]?.fingerprint }.toSet()
+    var duplicates = 0
     val freeG = google.filter { it.id !in linkedG }.groupBy { it.matchKey }.mapValues { it.value.toMutableList() }
     val usedG = HashSet<String>()
     for (si in samsung) {
         if (si.id in linkedS) continue
         val gi = freeG[si.matchKey]?.removeFirstOrNull()
-        if (gi != null) {
-            usedG += gi.id
-            ops += if (gi.fingerprint == si.fingerprint) BridgeOp.Agree(si.id, gi.id) else BridgeOp.UpdateGoogle(si.id, gi.id)
-        } else {
-            ops += BridgeOp.CreateInGoogle(si.id)
+        when {
+            gi != null -> {
+                usedG += gi.id
+                ops += if (gi.fingerprint == si.fingerprint) BridgeOp.Agree(si.id, gi.id) else BridgeOp.UpdateGoogle(si.id, gi.id)
+            }
+            si.fingerprint in pairedSPrints -> duplicates++
+            else -> ops += BridgeOp.CreateInGoogle(si.id)
         }
     }
     for (gi in google) {
         if (gi.id in linkedG || gi.id in usedG) continue
+        if (gi.fingerprint in pairedGPrints) { duplicates++; continue }
         ops += BridgeOp.CreateInSamsung(gi.id)
     }
 
     val held = if (!allowMassDelete && deletes.size > massDeleteLimit(links.size)) deletes.size else 0
     if (held == 0) ops += deletes
-    return BridgePlan(ops, conflicts, held, dropped)
+    return BridgePlan(ops, conflicts, held, dropped, duplicates)
 }
+
+/**
+ * Exact twins inside one calendar (same fingerprint): all but one to delete.
+ * The one kept is a paired event when there is one, else the oldest (lowest id),
+ * which is the person's original rather than a copy.
+ */
+fun planDedupe(items: List<BridgeItem>, paired: Set<String>): List<String> =
+    items.groupBy { it.fingerprint }.values.filter { it.size > 1 }.flatMap { group ->
+        val byAge = compareBy<BridgeItem> { it.id.toLongOrNull() ?: Long.MAX_VALUE }
+        val keep = group.filter { it.id in paired }.minWithOrNull(byAge) ?: group.minWith(byAge)
+        group.filter { it !== keep }.map { it.id }
+    }
 
 /**
  * EXDATE as Android stores it ("20261020T010000Z,…", "TZID=Asia/Seoul;20261020T100000",

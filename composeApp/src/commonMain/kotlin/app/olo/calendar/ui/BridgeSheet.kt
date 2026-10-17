@@ -165,8 +165,8 @@ private fun Connect(
         OloTextButton("취소", onDismiss)
         OloButton("연결 시작", enabled = t != null && p != null && state.bridgeProgress == null, onClick = {
             val to = target ?: return@OloButton
-            controller.startBridge(samsung.id, to.id)
-            onChanged(true)
+            // Background passes start only after the first one has recorded its pairs.
+            controller.startBridge(samsung.id, to.id) { onChanged(true) }
         })
     }
 }
@@ -191,6 +191,23 @@ private fun Connected(
 ) {
     val google = state.bridgeGoogle
     val r: BridgeReport? = state.bridgeReport
+    var dupes by remember { mutableStateOf(0 to 0) }
+    LaunchedEffect(r?.atMillis, state.bridgeProgress == null) {
+        if (state.bridgeProgress == null) dupes = runCatching { controller.bridgeDuplicates() }.getOrDefault(0 to 0)
+    }
+    if (dupes.first + dupes.second > 0) {
+        Surface(color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f), shape = MaterialTheme.shapes.small) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("똑같은 일정이 두 벌 있습니다", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "${state.bridgeSamsung?.name ?: "Samsung Calendar"} ${dupes.first}개 · ${google?.accountName ?: "구글"} ${dupes.second}개. " +
+                        "제목·시간·반복·알림·장소·메모까지 모두 같은 일정만 골라, 한 벌만 남기고 지웁니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row { OloButton("중복 ${dupes.first + dupes.second}개 정리", { controller.removeBridgeDuplicates { dupes = 0 to 0 } }, enabled = state.bridgeProgress == null) }
+            }
+        }
+    }
     Text(
         r?.let { "마지막 맞춤 ${agoKo(it.atMillis)} · 짝 ${it.linked}개" } ?: "첫 맞춤을 기다리는 중",
         style = MaterialTheme.typography.titleSmall,

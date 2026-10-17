@@ -8,6 +8,7 @@ import app.olo.calendar.model.Preferences
 import app.olo.calendar.model.decodeLinks
 import app.olo.calendar.model.encodeLinks
 import app.olo.calendar.model.planBridge
+import app.olo.calendar.model.planDedupe
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
@@ -42,7 +43,6 @@ data class BridgeReport(
  * run while the app is closed.
  */
 class BridgeEngine(private val store: CalendarStore, private val prefs: Preferences) {
-    private val lock = Mutex()
 
     var links: List<BridgeLink>
         get() = decodeLinks(prefs.get(KEY_LINKS))
@@ -60,7 +60,9 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         config: BridgeConfig,
         allowMassDelete: Boolean = false,
         onProgress: (Int, Int) -> Unit = { _, _ -> },
-    ): BridgeReport = lock.withLock {
+    ): BridgeReport = lock.withLock { runLocked(config, allowMassDelete, onProgress) }
+
+    private suspend fun runLocked(config: BridgeConfig, allowMassDelete: Boolean, onProgress: (Int, Int) -> Unit): BridgeReport {
         val samsung = store.bridgeItems(config.samsungCalendarId)
         val google = store.bridgeItems(config.googleCalendarId)
         val plan = planBridge(samsung, google, links, allowMassDelete)
@@ -72,9 +74,19 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         var done = 0
         onProgress(0, total)
 
-        // Freshly written ids: the source's print stands in for the partner's until it is read back.
+        // A fresh pair takes the source's print for both sides until it is read back, and
+        // pairs are saved as the pass goes: a pass cut short (process killed) leaves them
+        // recorded instead of copying everything again next time.
+        val sPrint = samsung.associate { it.id to it.fingerprint }
+        val gPrint = google.associate { it.id to it.fingerprint }
         val touched = HashSet<String>()
-        fun pair(sid: String, gid: String) { pairs[sid] = BridgeLink(sid, gid, "", ""); touched += sid }
+        var sinceSave = 0
+        fun pair(sid: String, gid: String) {
+            val p = sPrint[sid] ?: gPrint[gid] ?: ""
+            pairs[sid] = BridgeLink(sid, gid, p, p)
+            touched += sid
+            if (++sinceSave >= 25) { links = pairs.values.toList(); sinceSave = 0 }
+        }
 
         for (op in plan.ops) {
             val ok = runCatching {
@@ -106,7 +118,6 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
             when {
                 si == null && gi == null -> null
                 l.samsungId in touched && si != null && gi != null -> BridgeLink(l.samsungId, l.googleId, si.fingerprint, gi.fingerprint)
-                l.samsungPrint.isEmpty() || l.googlePrint.isEmpty() -> null
                 else -> l
             }
         }
@@ -116,7 +127,28 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
             conflicts = plan.conflicts, heldDeletes = plan.heldDeletes, failed = failed, linked = links.size,
         )
         prefs.put(KEY_REPORT, report.encode())
-        report
+        return report
+    }
+
+    /** Exact twins inside each of the two calendars (left by overlapping passes). */
+    suspend fun findDuplicates(config: BridgeConfig): Pair<Int, Int> {
+        val paired = links.flatMap { listOf(it.samsungId, it.googleId) }.toSet()
+        return planDedupe(store.bridgeItems(config.samsungCalendarId), paired).size to
+            planDedupe(store.bridgeItems(config.googleCalendarId), paired).size
+    }
+
+    /**
+     * Deletes the twins (keeping each pair's own event), forgets pairs that
+     * pointed at a deleted twin so its partner is not deleted after it, then
+     * runs a pass that re-pairs what is left. Returns how many were deleted.
+     */
+    suspend fun removeDuplicates(config: BridgeConfig): Int = lock.withLock {
+        val paired = links.flatMap { listOf(it.samsungId, it.googleId) }.toSet()
+        val gone = (planDedupe(store.bridgeItems(config.samsungCalendarId), paired) +
+            planDedupe(store.bridgeItems(config.googleCalendarId), paired)).filter { store.bridgeDelete(it) }.toSet()
+        links = links.filterNot { it.samsungId in gone || it.googleId in gone }
+        runLocked(config, allowMassDelete = false) { _, _ -> }
+        gone.size
     }
 
     /** Stops keeping pairs; both calendars keep every event they hold. */
@@ -126,6 +158,12 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     }
 
     private companion object {
+        /**
+         * One pass at a time in the whole process: the screen's engine and the
+         * background worker's are separate objects, and two passes that overlap
+         * both copy the same events (the duplicates of 0.8.0/0.8.1).
+         */
+        val lock = Mutex()
         const val KEY_LINKS = "bridge.links"
         const val KEY_REPORT = "bridge.report"
     }

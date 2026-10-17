@@ -97,6 +97,36 @@ class BridgeTest {
     }
 
     @Test
+    fun twinsAreNeverCopiedAcrossAndCanBeCleanedUp() = runTest {
+        // Two passes overlapped (0.8.0): every event exists twice on both sides.
+        val store = FakeBridgeStore()
+        store.put("S", "1", f("치과")); store.put("S", "2", f("치과"))
+        store.put("G", "11", f("치과")); store.put("G", "12", f("치과"))
+        val prefs = MemoryPreferences()
+        val engine = BridgeEngine(store, prefs)
+        val cfg = BridgeConfig("S", "G")
+        engine.run(cfg)
+        assertEquals(2 to 2, store.count("S") to store.count("G"))
+        assertEquals(1 to 1, engine.findDuplicates(cfg))
+        assertEquals(2, engine.removeDuplicates(cfg))
+        assertEquals(1 to 1, store.count("S") to store.count("G"))
+        // The original (lowest id) is the one kept, and the pair is whole again.
+        assertTrue(store.has("1"))
+        assertEquals(1, engine.links.size)
+        assertEquals(0 to 0, engine.findDuplicates(cfg))
+    }
+
+    @Test
+    fun anUnpairedTwinOfAPairedEventIsNotCopied() {
+        val a = item("s1", "치과"); val g = item("g1", "치과")
+        val p = planBridge(listOf(a, item("s9", "치과")), listOf(g, item("g9", "치과")), listOf(BridgeLink("s1", "g1", a.fingerprint, g.fingerprint)))
+        // s9 and g9 pair with each other (same look) rather than being copied twice more.
+        assertEquals(listOf<BridgeOp>(BridgeOp.Agree("s9", "g9")), p.ops)
+        val q = planBridge(listOf(a, item("s9", "치과")), listOf(g), listOf(BridgeLink("s1", "g1", a.fingerprint, g.fingerprint)))
+        assertTrue(q.ops.isEmpty()); assertEquals(1, q.duplicates)
+    }
+
+    @Test
     fun engineSettlesAndFollowsEdits() = runTest {
         val store = FakeBridgeStore()
         store.put("S", "s1", f("치과"))
@@ -132,6 +162,7 @@ private class FakeBridgeStore : CalendarStore {
     fun remove(id: String) { rows.remove(id) }
     fun count(cal: String) = rows.values.count { it.first == cal }
     fun fields(id: String) = rows.getValue(id).second
+    fun has(id: String) = id in rows
 
     override suspend fun bridgeItems(calendarId: String) = rows.filter { it.value.first == calendarId }.map { BridgeItem(it.key, it.value.second) }
     override suspend fun bridgeCopy(sourceId: String, toCalendarId: String): String? {
