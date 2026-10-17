@@ -561,7 +561,15 @@ private fun SearchScreen(controller: CalendarController, initial: String, onClos
             if (searched && hits.isEmpty()) {
                 Text("‘$query’ 일정이 없습니다.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp))
             }
-            LazyColumn(state = list, contentPadding = PaddingValues(horizontal = OloLayout.ContentMargin, vertical = 8.dp)) {
+            // Each row's day, for the scroller's bubble (the summary row borrows the first day).
+            val rowDays = remember(byDay) {
+                buildList {
+                    if (byDay.isNotEmpty()) add(byDay.firstKey())
+                    byDay.forEach { (d, l) -> repeat(1 + l.size) { add(d) } }
+                }
+            }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(state = list, contentPadding = PaddingValues(start = OloLayout.ContentMargin, end = OloLayout.ContentMargin + 12.dp, top = 8.dp, bottom = 8.dp), modifier = Modifier.fillMaxSize()) {
                 if (byDay.isNotEmpty()) item(key = "summary") {
                     val years = byDay.firstKey().year to byDay.lastKey().year
                     val past = hits.count { it.first.firstDay < today }
@@ -603,6 +611,8 @@ private fun SearchScreen(controller: CalendarController, initial: String, onClos
                         }
                     }
                 }
+            }
+            FastScroller(list, label = { i -> rowDays.getOrNull(i)?.let { "${it.year}년 ${it.monthNumber}월" } })
             }
         }
     }

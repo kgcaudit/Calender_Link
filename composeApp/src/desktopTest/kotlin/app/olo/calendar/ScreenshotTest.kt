@@ -30,6 +30,7 @@ import app.olo.calendar.ui.CalendarScreen
 import app.olo.calendar.ui.MonthStage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.datetime.plus
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalTime
@@ -62,6 +63,8 @@ class ScreenshotTest {
         // Halfway through a swipe to November: the page follows the finger.
         render("month-swipe", dark = false, swipe = 0.45f)
         render("search", dark = false, search = "기전팀")
+        // A long result list with the scroller held a third of the way down.
+        render("search-scroller", dark = false, search = "영화", scrubAt = 0.4f)
         // Galaxy Z Fold unfolded, as in the user's screenshot (12-hour clock).
         render("month-wide", dark = false, width = 2000, height = 1500, density = 2.2f)
         for (v in listOf(ViewMode.YEAR, ViewMode.WEEK, ViewMode.DAY, ViewMode.AGENDA)) {
@@ -71,7 +74,7 @@ class ScreenshotTest {
     }
 
     private fun render(
-        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, bridged: Boolean = false, folded: String? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
+        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, bridged: Boolean = false, folded: String? = null, scrubAt: Float? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
         view: ViewMode = ViewMode.MONTH,
     ) {
         val scene = ImageComposeScene(width = width, height = height, density = Density(density)) {
@@ -104,6 +107,18 @@ class ScreenshotTest {
                 img = scene.render(t)
             }
             img = scene.render(t + 16_000_000L)
+        }
+        if (scrubAt != null) {
+            // Hold the right edge partway down: the scroller jumps and shows its bubble.
+            var t = 9 * 150_000_000L
+            val x = width - 20f
+            scene.sendPointerEvent(PointerEventType.Press, Offset(x, height * 0.2f), type = PointerType.Touch)
+            for (k in 1..10) {
+                t += 16_000_000L
+                scene.sendPointerEvent(PointerEventType.Move, Offset(x, height * (0.2f + (scrubAt - 0.2f) * k / 10f)), type = PointerType.Touch)
+                img = scene.render(t)
+            }
+            for (k in 1..6) img = scene.render(t + k * 50_000_000L)
         }
         val out = File("build/screens/$name.png")
         out.parentFile.mkdirs()
@@ -165,7 +180,14 @@ private object SampleStore : CalendarStore {
     override suspend fun calendars() = cals
     override suspend fun occurrences(from: Instant, to: Instant) = occ.filter { it.end > from && it.begin < to }
     override suspend fun event(id: String): StoredEvent? = null
-    override suspend fun search(query: String, from: Instant, to: Instant): List<Occurrence> = occ.filter { it.title.contains(query) || it.location.contains(query) }
+    override suspend fun search(query: String, from: Instant, to: Instant): List<Occurrence> =
+        if (query == "영화") movies else occ.filter { it.title.contains(query) || it.location.contains(query) }
+
+    // Four years of Friday films, as in the user's search: long enough for the scroller.
+    private val movies = (0 until 140).map { k ->
+        val day = LocalDate(2023, 1, 6).plus(k * 10, kotlinx.datetime.DateTimeUnit.DAY)
+        timed("mv$k", "영화 ${k + 1}편", day, 20, 0, 22, 0)
+    }
     override suspend fun save(draft: EventDraft) = "x"
     override suspend fun delete(id: String) = Unit
     override suspend fun setVisible(calendarId: String, visible: Boolean) = Unit
