@@ -18,7 +18,8 @@ object OloLayout {
     val TopBarHeight = 56.dp
     val TouchTarget = 48.dp
     val IconSize = 24.dp
-    val DrawerWidth = 280.dp
+    /** Wide enough for the drawer tree's three indent levels (0.9.6: was 280). */
+    val DrawerWidth = 320.dp
     val RailWidth = 96.dp
     /** Week row height in the "lines" stage of the month view. */
     val LinesRow = 52.dp

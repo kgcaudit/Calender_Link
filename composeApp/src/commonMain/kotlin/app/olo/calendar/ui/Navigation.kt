@@ -303,7 +303,14 @@ private fun TopSection(
             enter = expandVertically(tween(OloMotion.Short)) + fadeIn(tween(OloMotion.Short)),
             exit = shrinkVertically(tween(OloMotion.Short)) + fadeOut(tween(OloMotion.Quick)),
         ) {
-            Column(Modifier.padding(top = 6.dp)) { content() }
+            // Level 2 sits one step in, hanging from a guide line under the band's chevron.
+            val guide = OloTone.bandLine
+            Column(
+                Modifier.padding(top = 6.dp).drawBehind {
+                    val x = 18.dp.toPx()
+                    drawLine(guide, androidx.compose.ui.geometry.Offset(x, 0f), androidx.compose.ui.geometry.Offset(x, size.height - 12.dp.toPx()), strokeWidth = 2.dp.toPx())
+                }.padding(start = 28.dp),
+            ) { content() }
         }
     }
 }
@@ -342,7 +349,15 @@ private fun SourceGroup(group: CategoryGroup, nav: NavActions, shown: (String) -
         enter = expandVertically(tween(OloMotion.Short)) + fadeIn(tween(OloMotion.Short)),
         exit = shrinkVertically(tween(OloMotion.Short)) + fadeOut(tween(OloMotion.Quick)),
     ) {
-        Column(Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Level 3: the account cards, one more step in, on their own guide line under the chevron.
+        val guide = OloTone.accent.copy(alpha = 0.35f)
+        Column(
+            Modifier.drawBehind {
+                val x = 13.dp.toPx()
+                drawLine(guide, androidx.compose.ui.geometry.Offset(x, 0f), androidx.compose.ui.geometry.Offset(x, size.height - 8.dp.toPx()), strokeWidth = 2.dp.toPx())
+            }.padding(start = 26.dp, bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             group.accounts.forEach { AccountCard(it, nav, shown) }
         }
     }
