@@ -66,7 +66,7 @@ class ScreenshotTest {
         render("month-swipe", dark = false, swipe = 0.45f)
         render("search", dark = false, search = "기전팀")
         // Settings: 기본 캘린더 grouped, 자동 naming its pick, the phone-only and not-allowed calendars marked.
-        render("settings", dark = false, settingsOpen = true, height = 4200)
+        render("settings", dark = false, settingsOpen = true)
         // A long result list with the scroller held a third of the way down.
         render("search-scroller", dark = false, search = "영화", scrubAt = 0.4f)
         // Galaxy Z Fold unfolded, as in the user's screenshot (12-hour clock).

@@ -51,6 +51,15 @@ import app.olo.calendar.model.describeKo
 import app.olo.calendar.model.koDate
 import app.olo.calendar.model.koLabel
 import app.olo.calendar.model.koShort
+import androidx.compose.material3.Icon
+import app.olo.calendar.design.OloIcons
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -348,33 +357,97 @@ fun SettingsSheet(
     onAllow: (String) -> Unit = {},
 ) {
     val st = state.settings
+    var picking by remember { mutableStateOf(false) }
+    // Android's settings guidelines: groups under a short heading with a divider,
+    // one line per setting, a summary only where it states a value or a limit.
     OloSheet(onDismiss) {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("설정", style = MaterialTheme.typography.headlineSmall)
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("설정", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 4.dp))
 
-            Text("표시", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("한 주 시작 요일", style = MaterialTheme.typography.bodyLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(DayOfWeek.SUNDAY to "일요일", DayOfWeek.MONDAY to "월요일").forEach { (d, label) ->
-                        FilterChip(st.weekStart == d, { onChange { it.copy(weekStart = d) } }, { Text(label) }, shape = MaterialTheme.shapes.extraSmall)
-                    }
-                }
+            SettingGroup("보기", first = true)
+            SettingRow("한 주 시작") {
+                SegmentedChoice(
+                    listOf(DayOfWeek.SUNDAY to "일", DayOfWeek.MONDAY to "월"), st.weekStart,
+                ) { d -> onChange { it.copy(weekStart = d) } }
             }
-            SettingSwitch("한국 음력 표시", "일요일과 음력 1일·15일에 음력 날짜를 보여 줍니다.", st.showLunar) { v -> onChange { it.copy(showLunar = v) } }
-            SettingSwitch("몇 번째 주인지 표시", "월 보기 왼쪽에 주 번호(ISO)를 보여 줍니다.", st.showWeekNumbers) { v -> onChange { it.copy(showWeekNumbers = v) } }
-            SettingSwitch("넓은 화면에서 달을 위아래로 넘기기", "폴드를 펼쳤을 때 월 보기를 위아래로 넘깁니다. 휴대폰 화면은 위아래 끌기가 달력 접기라서 항상 좌우로 넘깁니다.", st.verticalPagingWide) { v -> onChange { it.copy(verticalPagingWide = v) } }
+            SettingSwitch("음력", "일요일 · 음력 1일·15일", st.showLunar) { v -> onChange { it.copy(showLunar = v) } }
+            SettingSwitch("주 번호", "월 보기 왼쪽 · ISO", st.showWeekNumbers) { v -> onChange { it.copy(showWeekNumbers = v) } }
+            SettingSwitch("달을 위아래로 넘기기", "폴드를 펼쳤을 때만", st.verticalPagingWide) { v -> onChange { it.copy(verticalPagingWide = v) } }
 
-            Text("새 일정", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            DefaultCalendarPicker(state, onChange, onAllow)
+            SettingGroup("새 일정")
+            val chosen = state.calendars.firstOrNull { it.id == st.defaultCalendarId && it.writable && !it.isHoliday }
+            SettingRow(
+                "기본 캘린더",
+                summary = chosen?.name ?: state.autoCalendar?.let { "자동 · ${it.name}" } ?: "자동",
+                onClick = { picking = true },
+            ) {
+                Icon(OloIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            }
 
-            Text("안내", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(
-                "시간 형식(12/24시간)은 휴대폰 설정을 따릅니다. 알림은 휴대폰과 Google 캘린더의 알림을 그대로 씁니다. " +
-                    "일정은 휴대폰 캘린더에만 저장되고 OLO 서버로 보내지 않습니다.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            SettingGroup("정보")
+            SettingRow("시간 형식", summary = "휴대폰 설정(12/24시간)을 따름")
+            SettingRow("알림", summary = "휴대폰·Google 캘린더 알림을 그대로 씀")
+            SettingRow("개인정보", summary = "일정은 휴대폰 캘린더에만 저장, 서버 전송 없음")
+        }
+    }
+
+    if (picking) {
+        AlertDialog(
+            onDismissRequest = { picking = false },
+            shape = MaterialTheme.shapes.extraLarge,
+            title = { Text("기본 캘린더") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    DefaultCalendarPicker(state, onChange, onAllow, onPicked = { picking = false })
+                }
+            },
+            confirmButton = { OloTextButton("닫기", onClick = { picking = false }) },
+        )
+    }
+}
+
+/** A group heading (accent, small) with the divider Android's settings guidelines pair with it. */
+@Composable
+private fun SettingGroup(label: String, first: Boolean = false) {
+    if (!first) HorizontalDivider(Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+    Text(
+        label, style = MaterialTheme.typography.labelLarge, color = OloTone.accent, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+    )
+}
+
+/** One setting: title, an optional one-line summary, a trailing control; 56dp (72 with a summary). */
+@Composable
+private fun SettingRow(title: String, summary: String? = null, onClick: (() -> Unit)? = null, trailing: @Composable () -> Unit = {}) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = if (summary == null) 56.dp else 64.dp)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (summary != null) Text(summary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        trailing()
+    }
+}
+
+/** Two or three short choices in one compact segmented control, on the setting's own line. */
+@Composable
+private fun <T> SegmentedChoice(options: List<Pair<T, String>>, selected: T, onPick: (T) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.border(1.dp, cs.outline, MaterialTheme.shapes.small).clip(MaterialTheme.shapes.small)) {
+        options.forEachIndexed { i, (v, label) ->
+            val on = v == selected
+            if (i > 0) Box(Modifier.width(1.dp).height(36.dp).background(cs.outline))
+            Box(
+                Modifier.size(width = 52.dp, height = 36.dp).background(if (on) OloTone.container else Color.Transparent)
+                    .clickable { onPick(v) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal, color = if (on) OloTone.accent else cs.onSurfaceVariant)
+            }
         }
     }
 }
@@ -386,7 +459,7 @@ fun SettingsSheet(
  * stay on this phone; an account OLO may not see yet asks to be allowed first.
  */
 @Composable
-private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSettings) -> AppSettings) -> Unit, onAllow: (String) -> Unit) {
+private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSettings) -> AppSettings) -> Unit, onAllow: (String) -> Unit, onPicked: () -> Unit = {}) {
     val cs = MaterialTheme.colorScheme
     val st = state.settings
     val writable = state.calendars.filter { it.writable && !it.isHoliday }
@@ -400,13 +473,10 @@ private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSetting
     val general = writable.filter { it.id !in linkedIds }
     var ask by remember { mutableStateOf<CalendarInfo?>(null) }
 
-    Text("기본 캘린더", style = MaterialTheme.typography.bodyLarge)
-    Text(
-        "+ 버튼, 시간칸 누르기, 빠른 입력줄로 만든 일정이 저장되는 곳입니다. 편집 화면에서 일정마다 바꿀 수 있습니다.",
-        style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
-    )
-    Row(Modifier.fillMaxWidth().clickable { onChange { it.copy(defaultCalendarId = null) } }, verticalAlignment = Alignment.CenterVertically) {
-        RadioButton(selected = chosen == null, onClick = { onChange { it.copy(defaultCalendarId = null) } })
+    Text("새로 만든 일정이 저장될 곳 · 편집 화면에서 일정마다 바꿀 수 있음", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+    val pickAuto = { onChange { it.copy(defaultCalendarId = null) }; onPicked() }
+    Row(Modifier.fillMaxWidth().clickable(onClick = pickAuto), verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(selected = chosen == null, onClick = pickAuto)
         Column(Modifier.weight(1f)) {
             Text("자동", style = MaterialTheme.typography.bodyMedium)
             Text(
@@ -421,7 +491,7 @@ private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSetting
         Text(label, style = MaterialTheme.typography.labelMedium, color = OloTone.accent, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
         list.forEach { c ->
             val blocked = c.accountName in state.sync.accountsNeedingAccess
-            val pick = { if (blocked) ask = c else onChange { it.copy(defaultCalendarId = c.id) } }
+            val pick = { if (blocked) ask = c else { onChange { it.copy(defaultCalendarId = c.id) }; onPicked() } }
             Row(
                 Modifier.fillMaxWidth().clickable(onClick = pick).alpha(if (blocked) 0.55f else 1f),
                 verticalAlignment = Alignment.CenterVertically,
@@ -457,6 +527,7 @@ private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSetting
                     onAllow(c.accountName)
                     onChange { it.copy(defaultCalendarId = c.id) }
                     ask = null
+                    onPicked()
                 })
             },
             dismissButton = { OloTextButton("취소", onClick = { ask = null }) },
@@ -465,12 +536,5 @@ private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSetting
 }
 
 @Composable
-private fun SettingSwitch(title: String, body: String, value: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable { onChange(!value) }, verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Switch(checked = value, onCheckedChange = onChange)
-    }
-}
+private fun SettingSwitch(title: String, summary: String?, value: Boolean, onChange: (Boolean) -> Unit) =
+    SettingRow(title, summary, onClick = { onChange(!value) }) { Switch(checked = value, onCheckedChange = onChange) }
