@@ -402,14 +402,9 @@ fun AgendaView(state: CalendarUiState, controller: CalendarController, holidayCa
         }.distinct().filter { if (past) it < state.today else it >= state.today }
             .let { if (past) it.sortedDescending() else it.sorted() }
     }
-    // Month bands and day rows in one list; the rail jumps to a band.
+    // Month bands and day rows in one list; the fast scroller jumps along it.
     val byMonth = remember(days) { days.groupBy { YearMonth.of(it) } }
-    val bandIndex = remember(byMonth) {
-        var i = 0
-        byMonth.map { (m, ds) -> (m to i).also { i += ds.size + 1 } }.toMap()
-    }
     val list = rememberLazyListState()
-    val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize()) {
         AgendaTabs(past, controller::setAgendaPast)
         if (days.isEmpty()) {
@@ -431,27 +426,10 @@ fun AgendaView(state: CalendarUiState, controller: CalendarController, holidayCa
                     items(ds, key = { it.toEpochDays() }) { d -> AgendaDay(d, state, events, holidayCalendars, zone, use24, onOpen) }
                 }
             }
-            // The month rail, as Explorer's ㄱ–ㅎ index: tap a month to jump to it.
-            val current by remember(byMonth) {
-                derivedStateOf { bandIndex.entries.lastOrNull { it.value <= list.firstVisibleItemIndex }?.key }
-            }
-            Column(
-                Modifier.align(Alignment.CenterEnd).padding(end = 2.dp).width(30.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                byMonth.keys.take(12).forEach { m ->
-                    val on = m == current
-                    Text(
-                        "${m.month}", fontSize = 11.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
-                        color = if (on) OloTone.accent else cs.onSurfaceVariant.copy(alpha = 0.7f),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().clickable { scope.launch { list.animateScrollToItem(bandIndex.getValue(m)) } }
-                            .padding(vertical = 7.dp)
-                            .semantics { contentDescription = "${m.year}년 ${m.month}월로 이동" },
-                    )
-                }
-            }
+            // The fast scroller (as in search, 0.9.7) replaces the 12-month rail: it reaches
+            // every month, and its bubble names the month under the thumb.
+            val rowMonths = remember(byMonth) { byMonth.flatMap { (m, ds) -> List(ds.size + 1) { m } } }
+            FastScroller(list, label = { i -> rowMonths.getOrNull(i)?.koTitle() })
         }
     }
 }
@@ -501,7 +479,7 @@ private fun AgendaDay(
     val holidays = holidayNames(d, state.occurrences, holidayCalendars)
     val red = d.dayOfWeek == DayOfWeek.SUNDAY || holidays.isNotEmpty()
     val isToday = d == state.today
-    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 40.dp, top = 12.dp, bottom = 6.dp)) {
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 28.dp, top = 12.dp, bottom = 6.dp)) {
         // The date tile: solid clay today, the soft fill otherwise.
         Column(
             Modifier.size(46.dp).background(if (isToday) OloTone.solid else OloTone.container, RoundedCornerShape(14.dp)),
