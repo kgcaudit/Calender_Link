@@ -192,7 +192,7 @@ private fun MiniMonth(
                     val level = when { n <= 0 -> -1; n == 1 -> 0; n <= 3 -> 1; else -> 2 }
                     val red = d.dayOfWeek == DayOfWeek.SUNDAY || holidayNames(d, state.occurrences, holidayCalendars).isNotEmpty()
                     Box(
-                        Modifier.weight(1f).height(16.dp).padding(horizontal = 0.5.dp)
+                        Modifier.weight(1f).height(18.dp).padding(horizontal = 1.dp)
                             .background(
                                 when {
                                     !inMonth -> Color.Transparent
@@ -206,7 +206,7 @@ private fun MiniMonth(
                     ) {
                         if (inMonth) {
                             Text(
-                                "${d.dayOfMonth}", fontSize = 9.sp,
+                                "${d.dayOfMonth}", style = MiniDayStyle, textAlign = TextAlign.Center,
                                 color = when {
                                     isToday -> cs.onPrimary
                                     level == 2 -> cs.onPrimary
@@ -222,6 +222,21 @@ private fun MiniMonth(
         }
     }
 }
+
+/**
+ * The year view's day number: its line box is exactly the glyphs (no font
+ * padding, line height trimmed both ends), so it sits in the middle of its
+ * heat tile instead of riding low on the body text's 24sp line (0.9.8).
+ */
+private val MiniDayStyle = androidx.compose.ui.text.TextStyle(
+    fontSize = 9.5.sp,
+    lineHeight = 9.5.sp,
+    fontFeatureSettings = "tnum",
+    lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+        alignment = androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+        trim = androidx.compose.ui.text.style.LineHeightStyle.Trim.Both,
+    ),
+)
 
 // --- week / day time grid -------------------------------------------------------
 
