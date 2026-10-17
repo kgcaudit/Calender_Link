@@ -231,15 +231,24 @@ fun CalendarTree(nav: NavActions, horizontal: androidx.compose.ui.unit.Dp = 10.d
     val mainRest = if (bridged) {
         s.calendars.filter { it.accountName == google!!.accountName && it.accountType == google.accountType && it.id != google.id && !it.isHoliday && it.writable }
     } else emptyList()
-    val mainIds = if (bridged) setOf(samsung!!.id, google!!.id) + mainRest.map { it.id } else emptySet()
+    // Not linked yet: Samsung Calendar still belongs here, waiting for its Google main partner.
+    val samsungHome = if (bridged) null else s.calendars.firstOrNull { it.kind == SyncKind.SAMSUNG && it.writable }
+    val mainIds = when {
+        bridged -> setOf(samsung!!.id, google!!.id) + mainRest.map { it.id }
+        samsungHome != null -> setOf(samsungHome.id)
+        else -> emptySet()
+    }
     val tree = remember(s.calendars, s.eventCounts, s.sync, mainIds) {
         buildCalendarTree(s.calendars, s.eventCounts, s.sync.accountsWithSyncOff, s.sync.accountsNeedingAccess, mainIds)
     }
     val shown = { id: String -> s.calendarsById[id]?.let(s::isShown) ?: false }
     Column(Modifier.padding(horizontal = horizontal)) {
         if (!s.sync.masterSyncOn) MasterSyncLine(nav.onEnableMaster)
-        TopSection("LINKED", "연동 캘린더", mainIds.toList(), foldedByDefault = false, preview = emptyList(), nav = nav, shown = shown) {
-            if (bridged) MainSection(samsung!!, google!!, mainRest, nav, shown) else ConnectInvite(nav)
+        // No Samsung Calendar on this phone: nothing to link, so no section.
+        if (mainIds.isNotEmpty()) {
+            TopSection("LINKED", "연동 캘린더", mainIds.toList(), foldedByDefault = false, preview = emptyList(), nav = nav, shown = shown) {
+                if (bridged) MainSection(samsung!!, google!!, mainRest, nav, shown) else SamsungHome(samsungHome!!, nav, shown)
+            }
         }
         val general = tree.flatMap { it.calendars }
         TopSection("GENERAL", "일반 캘린더", general.map { it.id }, foldedByDefault = true, preview = general, nav = nav, shown = shown) {
@@ -311,21 +320,43 @@ private fun SourceGroup(group: CategoryGroup, nav: NavActions, shown: (String) -
     }
 }
 
-/** Nothing linked yet: invite the Samsung ⇄ Google main connection. */
+/**
+ * Samsung Calendar before it is linked: it already sits in "연동 캘린더" as an
+ * ordinary calendar line, and its own chip opens the connection — no separate
+ * invite box.
+ */
 @Composable
-private fun ConnectInvite(nav: NavActions) {
-    val samsung = nav.state.calendars.firstOrNull { it.kind == SyncKind.SAMSUNG && it.writable }
-    Surface(color = OloTone.container, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
-        Column(
-            Modifier.fillMaxWidth().then(if (samsung != null) Modifier.clickable { nav.onMove(samsung.id) } else Modifier).padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+private fun SamsungHome(samsung: CalendarInfo, nav: NavActions, shown: (String) -> Boolean) {
+    val cs = MaterialTheme.colorScheme
+    val n = nav.state.eventCounts[samsung.id] ?: 0
+    Surface(
+        color = cs.surfaceContainerLowest,
+        shape = MaterialTheme.shapes.medium,
+        border = androidx.compose.foundation.BorderStroke(1.dp, cs.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().clickable { nav.onMove(samsung.id) }.padding(start = 4.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("아직 연동된 캘린더가 없습니다", style = MaterialTheme.typography.titleSmall)
-            Text(
-                if (samsung != null) "${samsung.name}을 구글 메인 계정과 연결하면 갤럭시와 아이폰이 같은 일정을 봅니다 ›"
-                else "휴대폰에 Samsung Calendar가 없습니다.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            androidx.compose.material3.Checkbox(
+                checked = shown(samsung.id), onCheckedChange = { nav.onShown(listOf(samsung.id), it) },
+                colors = CheckboxDefaults.colors(checkedColor = calendarColor(samsung.colorArgb)),
             )
+            Column(Modifier.weight(1f)) {
+                Text(samsung.name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOfNotNull("삼성 계정", "일정 $n".takeIf { n > 0 }).joinToString(" · "),
+                    fontSize = 11.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                    Box(Modifier.size(6.dp).background(OloTone.accent, CircleShape))
+                    Spacer(Modifier.width(4.dp))
+                    Text("구글 메인과 연결 안 됨", fontSize = 11.sp, color = OloTone.accent, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                }
+            }
+            Text("연결", style = MaterialTheme.typography.labelLarge, color = OloTone.accent, fontWeight = FontWeight.SemiBold)
+            Icon(OloIcons.ChevronRight, contentDescription = "구글 메인과 연결", tint = OloTone.accent, modifier = Modifier.size(18.dp))
         }
     }
 }
