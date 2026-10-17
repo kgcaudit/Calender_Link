@@ -76,8 +76,11 @@ interface CalendarStore {
     /** Re-creates a deleted series (see [bridgeDeleted]) in [toCalendarId]; returns the new id. */
     suspend fun bridgeRestore(deletedId: String, toCalendarId: String): String?
 
-    /** Asks the OS to sync now. The OS decides when it actually runs. */
+    /** Asks the OS to sync every calendar account now. The OS decides when it actually runs. */
     fun requestSync()
+
+    /** Whether any calendar account is syncing or waiting to (so "지금 동기화" knows when to report). */
+    suspend fun syncActive(): Boolean = false
 
     /** Emits whenever the database changes, from this app or any other. */
     fun changes(): Flow<Unit>

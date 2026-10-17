@@ -138,4 +138,33 @@ class CalendarGroupsTest {
         assertEquals(mapOf("a" to true, "b" to false), decodeVisibility(encodeVisibility(mapOf("a" to true, "b" to false))))
         assertEquals(emptyMap(), decodeVisibility(null))
     }
+
+    private fun ui(settings: app.olo.calendar.model.AppSettings = app.olo.calendar.model.AppSettings(), needsAccess: List<String> = listOf("hazakuqa@gmail.com", "kgcaudit02@gmail.com")) =
+        app.olo.calendar.ui.CalendarUiState(
+            month = app.olo.calendar.model.YearMonth(2026, 10), selected = kotlinx.datetime.LocalDate(2026, 10, 17), today = kotlinx.datetime.LocalDate(2026, 10, 17),
+            calendars = cals, settings = settings, eventCounts = counts,
+            sync = app.olo.calendar.model.SyncStatus(accountsNeedingAccess = needsAccess),
+        )
+
+    @Test
+    fun autoPicksGoogleMainBeforeLinking() {
+        // Not hazakuqa (first by name, and OLO cannot see it): the account Samsung Calendar signs in with.
+        assertEquals("6", ui().autoCalendar?.id)
+        assertEquals("6", ui().googleMainGuess?.id)
+    }
+
+    @Test
+    fun autoPicksSamsungCalendarWhenLinked() {
+        val st = app.olo.calendar.model.AppSettings(bridgeSamsungId = "16", bridgeGoogleId = "6")
+        assertEquals("16", ui(st).autoCalendar?.id)
+        assertEquals("16", ui(st).defaultCalendar?.id)
+    }
+
+    @Test
+    fun chosenDefaultWins() {
+        val st = app.olo.calendar.model.AppSettings(bridgeSamsungId = "16", bridgeGoogleId = "6", defaultCalendarId = "7")
+        assertEquals("7", ui(st).defaultCalendar?.id)
+        // A calendar that can no longer be written falls back to 자동.
+        assertEquals("16", ui(st.copy(defaultCalendarId = "8")).defaultCalendar?.id)
+    }
 }

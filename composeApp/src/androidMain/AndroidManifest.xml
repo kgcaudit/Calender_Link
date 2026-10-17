@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
     <!-- Normal permission: lets OLO turn a Google account's calendar sync on itself (docs/06 §3). -->
     <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
+    <!-- "지금 동기화" waits while accounts sync (isSyncActive / isSyncPending); a normal permission. -->
+    <uses-permission android:name="android.permission.READ_SYNC_STATS" />
 
     <application
         android:enableOnBackInvokedCallback="true"

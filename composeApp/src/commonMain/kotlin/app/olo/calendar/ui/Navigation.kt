@@ -57,6 +57,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
@@ -146,7 +148,7 @@ fun DrawerContent(nav: NavActions) {
                 Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(top = 6.dp, bottom = 12.dp)) {
                     CalendarTree(nav)
                     Divider()
-                    DrawerRow(OloIcons.Sync, "지금 동기화", onClick = nav.onSyncNow)
+                    SyncNowRow(nav.state.syncRun, nav.onSyncNow)
                     DrawerRow(OloIcons.Settings, "설정", onClick = nav.onSettings)
                 }
                 NoteBar(nav, Modifier.align(Alignment.BottomCenter))
@@ -743,6 +745,58 @@ private fun DrawerRow(icon: ImageVector, text: String, onClick: () -> Unit) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(OloLayout.IconSize))
         Spacer(Modifier.width(16.dp))
         Text(text, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+/**
+ * "지금 동기화" with its outcome underneath (docs/04): the icon turns while the
+ * phone syncs, then the line says what came in, how many events the bridge
+ * matched, and whether some accounts may have been skipped.
+ */
+@Composable
+private fun SyncNowRow(run: SyncRun?, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val running = run?.running == true
+    val spin = androidx.compose.animation.core.rememberInfiniteTransition()
+    val angle by spin.animateFloat(
+        0f, 360f,
+        androidx.compose.animation.core.infiniteRepeatable(tween<Float>(900, easing = androidx.compose.animation.core.LinearEasing)),
+    )
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = OloLayout.TouchTarget)
+            .clickable(enabled = !running, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            OloIcons.Sync, contentDescription = null,
+            tint = if (running) OloTone.accent else LocalContentColor.current,
+            modifier = Modifier.size(OloLayout.IconSize).rotate(if (running) angle else 0f),
+        )
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(if (running) "동기화 중…" else "지금 동기화", style = MaterialTheme.typography.bodyLarge)
+            val line = when {
+                run == null -> null
+                running -> "계정마다 휴대폰에 동기화를 요청했습니다"
+                else -> listOfNotNull(
+                    run.atMillis?.let { "${agoKo(it)} 동기화" },
+                    when {
+                        run.added > 0 -> "새 일정 ${run.added}개"
+                        run.removed > 0 -> "일정 ${run.removed}개 줄어듦"
+                        else -> "바뀐 일정 없음"
+                    },
+                    run.matched?.takeIf { it > 0 }?.let { "맞춤 ${it}개" },
+                ).joinToString(" · ")
+            }
+            if (line != null) Text(line, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            if (run != null && !running && run.unreachable > 0) {
+                Text(
+                    "${run.unreachable}개 계정은 확인 필요 · 계정의 ‘확인 필요’를 눌러 허용하세요",
+                    style = MaterialTheme.typography.labelSmall, color = cs.error,
+                )
+            }
+        }
     }
 }
 

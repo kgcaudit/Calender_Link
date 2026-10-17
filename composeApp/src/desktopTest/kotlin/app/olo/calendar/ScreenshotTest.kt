@@ -63,6 +63,8 @@ class ScreenshotTest {
         // Halfway through a swipe to November: the page follows the finger.
         render("month-swipe", dark = false, swipe = 0.45f)
         render("search", dark = false, search = "기전팀")
+        // Settings: 기본 캘린더 grouped, 자동 naming its pick, the phone-only and not-allowed calendars marked.
+        render("settings", dark = false, settingsOpen = true, height = 4200)
         // A long result list with the scroller held a third of the way down.
         render("search-scroller", dark = false, search = "영화", scrubAt = 0.4f)
         // Galaxy Z Fold unfolded, as in the user's screenshot (12-hour clock).
@@ -74,7 +76,7 @@ class ScreenshotTest {
     }
 
     private fun render(
-        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, bridged: Boolean = false, folded: String? = null, scrubAt: Float? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
+        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, bridged: Boolean = false, folded: String? = null, scrubAt: Float? = null, settingsOpen: Boolean = false, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
         view: ViewMode = ViewMode.MONTH,
     ) {
         val scene = ImageComposeScene(width = width, height = height, density = Density(density)) {
@@ -88,7 +90,7 @@ class ScreenshotTest {
                         if (folded != null) prefs.put("folded", folded)
                         CalendarController(SampleStore, scope, zone, prefs).also { it.setView(view) }
                     }
-                    CalendarScreen(c, startStage = stage, startDrawerOpen = drawer, startSearch = search, startBridgeFor = bridge)
+                    CalendarScreen(c, startStage = stage, startDrawerOpen = drawer, startSearch = search, startBridgeFor = bridge, startSettings = settingsOpen)
                 }
             }
           }
@@ -191,7 +193,7 @@ private object SampleStore : CalendarStore {
     override suspend fun save(draft: EventDraft) = "x"
     override suspend fun delete(id: String) = Unit
     override suspend fun setVisible(calendarId: String, visible: Boolean) = Unit
-    override suspend fun syncStatus() = SyncStatus(accountsWithSyncOff = listOf("kgcaudit02@gmail.com", "sutest@gmail.com"))
+    override suspend fun syncStatus() = SyncStatus(accountsWithSyncOff = listOf("kgcaudit02@gmail.com", "sutest@gmail.com"), accountsNeedingAccess = listOf("hazakuqa@gmail.com"))
     override suspend fun setAccountSync(account: String, on: Boolean) = true
     override suspend fun bridgeItems(calendarId: String): List<app.olo.calendar.model.BridgeItem> =
         if (calendarId != "16") emptyList() else occ.map { o ->

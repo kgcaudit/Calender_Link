@@ -27,6 +27,10 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.draw.alpha
+import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.text.font.FontWeight
+import app.olo.calendar.design.OloTone
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -336,7 +340,13 @@ fun MoveSheet(
 
 /** OLO's own settings; event data and notifications stay with the phone's calendar. */
 @Composable
-fun SettingsSheet(state: CalendarUiState, onChange: ((AppSettings) -> AppSettings) -> Unit, onDismiss: () -> Unit) {
+fun SettingsSheet(
+    state: CalendarUiState,
+    onChange: ((AppSettings) -> AppSettings) -> Unit,
+    onDismiss: () -> Unit,
+    /** Lets OLO see an account ("확인 필요"), then turns its sync on. */
+    onAllow: (String) -> Unit = {},
+) {
     val st = state.settings
     OloSheet(onDismiss) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -356,23 +366,7 @@ fun SettingsSheet(state: CalendarUiState, onChange: ((AppSettings) -> AppSetting
             SettingSwitch("넓은 화면에서 달을 위아래로 넘기기", "폴드를 펼쳤을 때 월 보기를 위아래로 넘깁니다. 휴대폰 화면은 위아래 끌기가 달력 접기라서 항상 좌우로 넘깁니다.", st.verticalPagingWide) { v -> onChange { it.copy(verticalPagingWide = v) } }
 
             Text("새 일정", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("기본 캘린더", style = MaterialTheme.typography.bodyLarge)
-            val writable = state.calendars.filter { it.writable && !it.isHoliday }
-            Row(Modifier.fillMaxWidth().clickable { onChange { it.copy(defaultCalendarId = null) } }, verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(selected = st.defaultCalendarId == null || writable.none { it.id == st.defaultCalendarId }, onClick = { onChange { it.copy(defaultCalendarId = null) } })
-                Text("자동 (Google 기본 캘린더)", style = MaterialTheme.typography.bodyMedium)
-            }
-            writable.forEach { c ->
-                Row(Modifier.fillMaxWidth().clickable { onChange { it.copy(defaultCalendarId = c.id) } }, verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = st.defaultCalendarId == c.id, onClick = { onChange { it.copy(defaultCalendarId = c.id) } })
-                    Tile(calendarColor(c.colorArgb), 12.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(c.name, style = MaterialTheme.typography.bodyMedium)
-                        Text("${c.accountName} · ${c.kind.koLabel()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
+            DefaultCalendarPicker(state, onChange, onAllow)
 
             Text("안내", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
@@ -382,6 +376,91 @@ fun SettingsSheet(state: CalendarUiState, onChange: ((AppSettings) -> AppSetting
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/**
+ * Where new events go (docs/07 §14), grouped as in the drawer: "연동 캘린더"
+ * (Samsung Calendar and the Google main calendar) first, then the rest.
+ * "자동" names what it picks right now; a phone-only calendar says its events
+ * stay on this phone; an account OLO may not see yet asks to be allowed first.
+ */
+@Composable
+private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSettings) -> AppSettings) -> Unit, onAllow: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val st = state.settings
+    val writable = state.calendars.filter { it.writable && !it.isHoliday }
+    val auto = state.autoCalendar
+    val chosen = writable.firstOrNull { it.id == st.defaultCalendarId }
+    val linkedIds = listOfNotNull(
+        state.bridgeSamsung?.id ?: writable.firstOrNull { it.kind == SyncKind.SAMSUNG }?.id,
+        state.googleMainGuess?.id,
+    )
+    val linked = linkedIds.mapNotNull { id -> writable.firstOrNull { it.id == id } }
+    val general = writable.filter { it.id !in linkedIds }
+    var ask by remember { mutableStateOf<CalendarInfo?>(null) }
+
+    Text("기본 캘린더", style = MaterialTheme.typography.bodyLarge)
+    Text(
+        "+ 버튼, 시간칸 누르기, 빠른 입력줄로 만든 일정이 저장되는 곳입니다. 편집 화면에서 일정마다 바꿀 수 있습니다.",
+        style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+    )
+    Row(Modifier.fillMaxWidth().clickable { onChange { it.copy(defaultCalendarId = null) } }, verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(selected = chosen == null, onClick = { onChange { it.copy(defaultCalendarId = null) } })
+        Column(Modifier.weight(1f)) {
+            Text("자동", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                auto?.let { "지금은 ${it.name}" + if (it.name != it.accountName && it.kind != SyncKind.DEVICE) " · ${it.accountName}" else "" } ?: "저장할 캘린더가 없습니다",
+                style = MaterialTheme.typography.bodySmall, color = OloTone.accent,
+            )
+        }
+    }
+    @Composable
+    fun group(label: String, list: List<CalendarInfo>) {
+        if (list.isEmpty()) return
+        Text(label, style = MaterialTheme.typography.labelMedium, color = OloTone.accent, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+        list.forEach { c ->
+            val blocked = c.accountName in state.sync.accountsNeedingAccess
+            val pick = { if (blocked) ask = c else onChange { it.copy(defaultCalendarId = c.id) } }
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = pick).alpha(if (blocked) 0.55f else 1f),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = chosen?.id == c.id, onClick = pick)
+                Tile(calendarColor(c.colorArgb), 12.dp)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(c.name, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        listOfNotNull(c.accountName.takeIf { it != c.name && c.kind != SyncKind.DEVICE }, c.kind.koLabel()).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                    )
+                    when {
+                        blocked -> Text("확인 필요 · 고르면 먼저 허용합니다", style = MaterialTheme.typography.labelSmall, color = cs.error)
+                        c.kind == SyncKind.DEVICE -> Text("다른 기기에 안 보임", style = MaterialTheme.typography.labelSmall, color = cs.error)
+                    }
+                }
+            }
+        }
+    }
+    group("연동 캘린더", linked)
+    group("일반 캘린더", general)
+
+    ask?.let { c ->
+        AlertDialog(
+            onDismissRequest = { ask = null },
+            shape = MaterialTheme.shapes.extraLarge,
+            title = { Text("계정 허용이 필요합니다") },
+            text = { Text("${c.accountName}은 OLO가 아직 동기화 상태를 확인하지 못한 계정입니다. 계정 선택 화면에서 한 번 허용하면 기본 캘린더로 쓰고 동기화도 켭니다.") },
+            confirmButton = {
+                OloTextButton("허용하고 고르기", onClick = {
+                    onAllow(c.accountName)
+                    onChange { it.copy(defaultCalendarId = c.id) }
+                    ask = null
+                })
+            },
+            dismissButton = { OloTextButton("취소", onClick = { ask = null }) },
+        )
     }
 }
 

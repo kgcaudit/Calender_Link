@@ -328,11 +328,30 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             putBoolean(ContentResolver.SYNC_EXTRAS_EXPEDITED, true)
         }
         Thread {
-            googleAccounts().forEach { name ->
-                runCatching { ContentResolver.requestSync(Account(name, "com.google"), CalendarContract.AUTHORITY, extras) }
+            syncedAccounts().forEach { a ->
+                runCatching { ContentResolver.requestSync(a, CalendarContract.AUTHORITY, extras) }
             }
         }.start()
     }
+
+    override suspend fun syncActive(): Boolean = io {
+        syncedAccounts().any { a ->
+            runCatching { ContentResolver.isSyncActive(a, CalendarContract.AUTHORITY) || ContentResolver.isSyncPending(a, CalendarContract.AUTHORITY) }
+                .getOrDefault(false)
+        }
+    }
+
+    /**
+     * Every account whose calendars a sync adapter carries: Google, Exchange,
+     * the Samsung account, … — not phone-only calendars (LOCAL) or Samsung's
+     * built-in holiday and contact-date accounts.
+     */
+    private fun syncedAccounts(): List<Account> =
+        resolver.query(Calendars.CONTENT_URI, arrayOf(Calendars.ACCOUNT_NAME, Calendars.ACCOUNT_TYPE), null, null, null)
+            .list { it.str(Calendars.ACCOUNT_NAME) to it.str(Calendars.ACCOUNT_TYPE) }
+            .distinct()
+            .filter { (name, type) -> name.isNotBlank() && type.isNotBlank() && type != CalendarContract.ACCOUNT_TYPE_LOCAL && !type.startsWith("local") && !name.startsWith("local.") }
+            .map { (name, type) -> Account(name, type) }
 
     override fun changes(): Flow<Unit> = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {

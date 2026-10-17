@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
 import kotlinx.datetime.DateTimeUnit
@@ -56,6 +57,8 @@ data class CalendarUiState(
     val occurrences: List<Occurrence> = emptyList(),
     val sync: SyncStatus = SyncStatus(),
     val eventCounts: Map<String, Int> = emptyMap(),
+    /** The last "지금 동기화", or the one running now. */
+    val syncRun: SyncRun? = null,
     val loading: Boolean = true,
     val error: String? = null,
     val view: ViewMode = ViewMode.MONTH,
@@ -106,13 +109,43 @@ data class CalendarUiState(
 
     fun isShown(c: CalendarInfo): Boolean = settings.isShown(c)
 
-    /** Where a new event goes: the chosen default, else a writable primary Google calendar. */
+    /** Where a new event goes: the chosen default, else [autoCalendar]. */
     val defaultCalendar: CalendarInfo?
+        get() = calendars.firstOrNull { it.id == settings.defaultCalendarId && it.writable && !it.isHoliday } ?: autoCalendar
+
+    /**
+     * "자동" (docs/07 §14): with the bridge on, Samsung Calendar — Galaxy devices
+     * see the event at once and the bridge carries it to the iPhone. Before
+     * linking, the Google main calendar ([googleMainGuess]). Name order only last.
+     */
+    val autoCalendar: CalendarInfo?
         get() = calendars.filter { it.writable && !it.isHoliday }.let { w ->
-            w.firstOrNull { it.id == settings.defaultCalendarId }
+            bridgeSamsung?.takeIf { bridgeGoogle != null && it in w }
+                ?: googleMainGuess
                 ?: w.firstOrNull { it.kind.reachesGoogle && it.isPrimary }
                 ?: w.firstOrNull { it.kind.reachesGoogle }
                 ?: w.firstOrNull()
+        }
+
+    /**
+     * The Google main calendar before the bridge names one: the linked one if
+     * set; else a primary Google calendar, preferring the account Samsung
+     * Calendar signs in with, then accounts that sync and OLO can see, then the
+     * one holding most events.
+     */
+    val googleMainGuess: CalendarInfo?
+        get() {
+            bridgeGoogle?.let { return it }
+            val samsungAccount = calendars.firstOrNull { it.kind == SyncKind.SAMSUNG && it.writable }?.accountName
+            return calendars.filter { it.kind == SyncKind.GOOGLE && it.isPrimary && it.writable && !it.isHoliday }
+                .sortedWith(
+                    compareBy<CalendarInfo>(
+                        { it.accountName != samsungAccount },
+                        { it.accountName in sync.accountsNeedingAccess || it.accountName in sync.accountsWithSyncOff },
+                        { -(eventCounts[it.id] ?: 0) },
+                        { it.accountName },
+                    ),
+                ).firstOrNull()
         }
 }
 
@@ -168,7 +201,11 @@ class CalendarController(
     /** One pass now. [allowMassDelete] releases deletions held by the safety stop. */
     fun runBridge(allowMassDelete: Boolean = false, done: (Result<BridgeReport>) -> Unit = {}) {
         val config = bridgeConfig() ?: return
-        scope.launch {
+        scope.launch { done(bridgePass(config, allowMassDelete)) }
+    }
+
+    private suspend fun bridgePass(config: BridgeConfig, allowMassDelete: Boolean): Result<BridgeReport> {
+        run {
             val r = runCatching {
                 bridge.run(config, allowMassDelete) { d, t -> if (t > 0) _state.update { it.copy(bridgeProgress = d to t) } }
             }
@@ -183,7 +220,7 @@ class CalendarController(
             val d = runCatching { bridge.findDuplicates(config) }.getOrNull()
             if (d != null) _state.update { it.copy(bridgeDuplicates = d.first + d.second) }
             if (r.getOrNull()?.let { it.toGoogle + it.toSamsung + it.deleted > 0 } == true) store.requestSync()
-            done(r)
+            return r
         }
     }
 
@@ -311,7 +348,11 @@ class CalendarController(
     }
 
     fun reload() {
-        scope.launch {
+        scope.launch { reloadNow() }
+    }
+
+    private suspend fun reloadNow() {
+        run {
             val s = _state.value
             val (fromDay, toDay) = range(s)
             val from = fromDay.atStartOfDayIn(zone)
@@ -462,9 +503,36 @@ class CalendarController(
         }
     }
 
+    /**
+     * "지금 동기화" (docs/04): asks every syncing account (Google, Exchange, Samsung)
+     * to sync, waits while the phone works on it, then runs a bridge pass so
+     * Samsung Calendar and the Google main calendar agree, and reports what came
+     * in. Accounts OLO may not see yet are counted, since the phone may ignore them.
+     */
     fun syncNow() {
-        store.requestSync()
-        reload()
+        if (_state.value.syncRun?.running == true) return
+        scope.launch {
+            val before = _state.value.eventCounts.values.sum()
+            _state.update { it.copy(syncRun = SyncRun(running = true)) }
+            store.requestSync()
+            delay(1500)
+            var waited = 0
+            while (waited < 60 && runCatching { store.syncActive() }.getOrDefault(false)) { delay(1000); waited++ }
+            val bridged = bridgeConfig()?.let { bridgePass(it, allowMassDelete = false).getOrNull() }
+            reloadNow()
+            val s = _state.value
+            val after = s.eventCounts.values.sum()
+            _state.update {
+                it.copy(
+                    syncRun = SyncRun(
+                        running = false, atMillis = Clock.System.now().toEpochMilliseconds(),
+                        added = maxOf(0, after - before), removed = maxOf(0, before - after),
+                        matched = bridged?.let { b -> b.toGoogle + b.toSamsung },
+                        unreachable = s.sync.accountsNeedingAccess.size,
+                    ),
+                )
+            }
+        }
     }
 
     suspend fun planMove(fromCalendarId: String): MovePlan = store.planMove(fromCalendarId)
@@ -492,6 +560,18 @@ class CalendarController(
     }
 }
 
+/** A "지금 동기화" run: running, or how the last one ended. */
+data class SyncRun(
+    val running: Boolean,
+    val atMillis: Long? = null,
+    val added: Int = 0,
+    val removed: Int = 0,
+    /** Events the bridge copied between Samsung Calendar and the Google main calendar; null when not linked. */
+    val matched: Int? = null,
+    /** Accounts the phone may have skipped because OLO has not been allowed to see them. */
+    val unreachable: Int = 0,
+)
+
 /** One reason events might not reach the other phone. */
 sealed interface SyncAction {
     data object MasterSyncOff : SyncAction
@@ -505,10 +585,10 @@ private fun recolored(calendars: List<CalendarInfo>, settings: AppSettings): Lis
     if (settings.hues.isEmpty()) calendars
     else calendars.map { c -> settings.hueOf(c.id)?.let { c.copy(colorArgb = it.argb) } ?: c }
 
-/** The occurrences OLO draws: hidden calendars out, OLO-chosen colours in. */
 /** How far ahead search follows a repeating event (docs/04 §검색). */
 const val SEARCH_YEARS_AHEAD = 5
 
+/** The occurrences OLO draws: hidden calendars out, OLO-chosen colours in. */
 private fun shownOf(all: List<Occurrence>, calendars: List<CalendarInfo>, settings: AppSettings, bridged: Set<String> = emptySet()): List<Occurrence> {
     val hidden = calendars.filter { !settings.isShown(it) }.map { it.id }.toSet()
     // A bridged pair is one event: show the Samsung copy, unless Samsung Calendar is hidden.

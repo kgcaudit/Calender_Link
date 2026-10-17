@@ -111,9 +111,10 @@ fun CalendarScreen(
     startDrawerOpen: Boolean = false,
     startSearch: String? = null,
     startBridgeFor: String? = null,
+    startSettings: Boolean = false,
 ) {
     val state by controller.state.collectAsState()
-    var sheet by remember { mutableStateOf<Sheet>(startBridgeFor?.let { Sheet.Bridge(it) } ?: Sheet.None) }
+    var sheet by remember { mutableStateOf<Sheet>(startBridgeFor?.let { Sheet.Bridge(it) } ?: if (startSettings) Sheet.Settings else Sheet.None) }
     var searchOpen by remember { mutableStateOf(startSearch != null) }
     var pickerOpen by remember { mutableStateOf(false) }
     // "…동기화를 켰습니다 · 되돌리기" at the foot of the drawer / calendar sheet.
@@ -157,7 +158,7 @@ fun CalendarScreen(
             onMove = { id -> sheet = moveOrBridge(state, id); closeDrawer() },
             onView = { v -> controller.setView(v); closeDrawer() },
             onCalendars = { sheet = Sheet.Calendars; closeDrawer() },
-            onSyncNow = { controller.syncNow(); closeDrawer() },
+            onSyncNow = controller::syncNow,
             onSettings = { sheet = Sheet.Settings; closeDrawer() },
         )
         val content: @Composable () -> Unit = {
@@ -299,6 +300,7 @@ fun CalendarScreen(
             state = state,
             onChange = controller::updateSettings,
             onDismiss = { sheet = Sheet.None },
+            onAllow = { account -> enableSync(account, state, controller, settings) { syncNote = it } },
         )
         is Sheet.Bridge -> BridgeSheet(
             samsung = state.calendarsById[s.samsungCalendarId],
