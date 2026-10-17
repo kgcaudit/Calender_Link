@@ -57,8 +57,8 @@ class ScreenshotTest {
         render("month-drawer-dark", dark = true, drawer = true)
         render("bridge-sheet", dark = false, bridge = "16")
         render("month-drawer-bridged", dark = false, drawer = true, bridged = true, height = 3600)
-        // 일반 캘린더 open, the Samsung holiday account folded by its tile.
-        render("month-drawer-folded", dark = false, drawer = true, folded = "GENERAL=0,SAMSUNG/LOCAL/local.samsungholiday=1", height = 3600)
+        // 일반 캘린더 open, 내 기기 folded by its heading, the Samsung holiday account by its tile.
+        render("month-drawer-folded", dark = false, drawer = true, folded = "GENERAL=0,SAMSUNG/LOCAL/local.samsungholiday=1,SRC/DEVICE=1", height = 3600)
         render("view-agenda-dark", dark = true, view = ViewMode.AGENDA)
         // Halfway through a swipe to November: the page follows the finger.
         render("month-swipe", dark = false, swipe = 0.45f)

@@ -57,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.clip
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.graphics.Color
@@ -311,14 +312,38 @@ private fun TopSection(
 private fun SourceGroup(group: CategoryGroup, nav: NavActions, shown: (String) -> Boolean) {
     val ids = group.calendars.map { it.id }
     val tri = triState(ids, shown)
-    Row(Modifier.fillMaxWidth().padding(top = 6.dp).height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+    // Folds like the top sections; open at first. Key: "SRC/DEVICE", "SRC/SAMSUNG", …
+    val key = "SRC/${group.key}"
+    val folded = nav.state.settings.folded[key] ?: false
+    val turn by animateFloatAsState(if (folded) -90f else 0f, tween(OloMotion.Short))
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp).height(40.dp).clip(MaterialTheme.shapes.small)
+            .clickable { nav.onFold(key, !folded) },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            OloIcons.ChevronDown, contentDescription = if (folded) "펼치기" else "접기", tint = OloTone.accent,
+            modifier = Modifier.padding(start = 4.dp).size(18.dp).rotate(turn),
+        )
         TriStateCheckbox(state = tri.toggleable(), onClick = { nav.onShown(ids, tri != TriState.ALL) })
         Text(group.category.label, style = MaterialTheme.typography.labelLarge, color = OloTone.accent, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        if (folded) {
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                group.calendars.filter { shown(it.id) }.take(4).forEach { c -> Box(Modifier.size(8.dp).background(dotColor(c), CircleShape)) }
+            }
+            Spacer(Modifier.width(8.dp))
+        }
         Count(ids.count(shown), ids.size)
         Spacer(Modifier.width(10.dp))
     }
-    Column(Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        group.accounts.forEach { AccountCard(it, nav, shown) }
+    AnimatedVisibility(
+        visible = !folded,
+        enter = expandVertically(tween(OloMotion.Short)) + fadeIn(tween(OloMotion.Short)),
+        exit = shrinkVertically(tween(OloMotion.Short)) + fadeOut(tween(OloMotion.Quick)),
+    ) {
+        Column(Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            group.accounts.forEach { AccountCard(it, nav, shown) }
+        }
     }
 }
 
