@@ -296,7 +296,8 @@ private fun nearestStage(stage: AnchoredDraggableState<MonthStage>, velocity: Fl
 internal fun viewTitle(s: CalendarUiState): String = when (s.view) {
     ViewMode.YEAR -> "${s.selected.year}년"
     ViewMode.AGENDA -> "일정"
-    else -> s.month.koTitle()
+    // One face, one size, fixed width: "2027년 01월" (no width jump between 9월 and 10월).
+    else -> "${s.month.year}년 ${s.month.month.toString().padStart(2, '0')}월"
 }
 
 /** Month pages; a settled swipe shows that month (the day number is kept). */

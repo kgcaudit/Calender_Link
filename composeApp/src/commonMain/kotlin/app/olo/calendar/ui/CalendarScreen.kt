@@ -348,17 +348,9 @@ private fun TopBar(
                 .semantics { contentDescription = "$title, 년·월 고르기" },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // The title rolls with the page: up for later, down for earlier (docs/05 §6 #8).
-            AnimatedContent(
-                targetState = title to titleOrder,
-                contentKey = { it.first },
-                transitionSpec = {
-                    val dir = if (targetState.second >= initialState.second) 1 else -1
-                    (slideInVertically(tween(OloMotion.Medium, easing = OloMotion.EmphasizedDecelerate)) { h -> dir * h / 2 } + fadeIn(tween(OloMotion.Medium))) togetherWith
-                        (slideOutVertically(tween(OloMotion.Quick)) { h -> -dir * h / 2 } + fadeOut(tween(OloMotion.Quick)))
-                },
-                label = "title",
-            ) { (t, _) -> TitleText(t) }
+            // The title flips like a card about its vertical axis, turning the way the
+            // pages slide: later months turn to the left, earlier ones to the right.
+            FlipTitle(title, titleOrder)
             Icon(OloIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(18.dp).padding(start = 2.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (onArrows != null) {
@@ -382,19 +374,37 @@ private fun TopBar(
     }
 }
 
-/** "2026 / 10월": the year as clay accent, the month in bold ink (docs/06 §4 ④). */
+/**
+ * "2027년 01월" in one face, size and colour. A change of title is a horizontal
+ * card flip: the old face turns edge-on, the new one turns in from the other
+ * side, in the direction the month pages moved.
+ */
 @Composable
-private fun TitleText(title: String) {
-    val parts = Regex("^(\\d{4})년 (\\d{1,2})월$").find(title)?.groupValues
-    if (parts == null) {
-        Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
-        return
+private fun FlipTitle(title: String, order: Int) {
+    var face by remember { mutableStateOf(title) }
+    var lastOrder by remember { mutableStateOf(order) }
+    val turn = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(title) {
+        if (title == face) return@LaunchedEffect
+        val dir = if (order >= lastOrder) -1f else 1f
+        lastOrder = order
+        turn.animateTo(90f * dir, tween(OloMotion.Quick, easing = OloMotion.EmphasizedAccelerate))
+        face = title
+        turn.snapTo(-90f * dir)
+        turn.animateTo(0f, tween(OloMotion.Short, easing = OloMotion.EmphasizedDecelerate))
     }
-    Row(verticalAlignment = Alignment.Bottom) {
-        Text(parts[1], style = MaterialTheme.typography.titleLarge, color = OloTone.accent, modifier = Modifier.padding(bottom = 1.dp))
-        Text(" / ", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(bottom = 2.dp))
-        Text("${parts[2]}월", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 1)
-    }
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
+    Text(
+        face,
+        // Tabular figures: 01–12 keep the same width, so the title never shifts.
+        style = MaterialTheme.typography.headlineSmall.copy(fontFeatureSettings = "tnum"),
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        modifier = Modifier.graphicsLayer {
+            rotationY = turn.value
+            cameraDistance = 16f * density
+        },
+    )
 }
 
 private fun Modifier.graphicsFlip(): Modifier = this.graphicsLayer { scaleX = -1f }
