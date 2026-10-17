@@ -90,17 +90,31 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
 
     /**
      * Deleted series still held by the phone (not yet purged by the sync
-     * adapter) on either side, that no live Samsung event matches: what a wrong
+     * adapter) that a bridge pass deleted on its own (docs/07 §16): what a wrong
      * deletion took and can still be brought back.
+     *
+     * A deletion the person made — in Samsung Calendar, Google Calendar, or by
+     * confirming "양쪽에서 지우기" for something they deleted — is theirs, not a
+     * loss: neither the row nor the twin OLO deleted after it is offered back.
+     * Twins removed by "중복 정리" are not offered either.
      */
     suspend fun recoverable(config: BridgeConfig): List<BridgeItem> {
         // Anything that already looks like a live event (same title, start, end, rule) is
         // not brought back: it was restored another way (the Samsung trash, say).
         val live = (store.bridgeItems(config.samsungCalendarId) + store.bridgeItems(config.googleCalendarId)).map { it.twinKey }.toSet()
-        return (store.bridgeDeleted(config.samsungCalendarId) + store.bridgeDeleted(config.googleCalendarId))
-            .filter { it.twinKey !in live }
+        val deleted = store.bridgeDeleted(config.samsungCalendarId) + store.bridgeDeleted(config.googleCalendarId)
+        val ours = oloDeleted
+        // Events the person deleted themselves: any deleted copy OLO did not delete.
+        val byPerson = deleted.filter { it.id !in ours }.map { it.twinKey }.toSet()
+        return deleted
+            .filter { it.id in ours && it.twinKey !in byPerson && it.twinKey !in live }
             .distinctBy { it.twinKey }
     }
+
+    /** Ids a bridge pass deleted (newest last, capped), so [recoverable] can tell OLO's deletions from the person's. */
+    private var oloDeleted: Set<String>
+        get() = prefs.get(KEY_OLO_DELETED).orEmpty().split(',').filter { it.isNotBlank() }.toSet()
+        set(v) = prefs.put(KEY_OLO_DELETED, v.toList().takeLast(3000).joinToString(","))
 
     /** Brings them back into Samsung Calendar (the home calendar); a pass then copies them to Google. */
     suspend fun restore(config: BridgeConfig, connected: Boolean): Int = lock.withLock {
@@ -173,8 +187,8 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
                         if (newS != op.samsungId) pairs.remove(op.samsungId)
                         pair(newS, op.googleId)
                     } != null
-                    is BridgeOp.DeleteGoogle -> store.bridgeDelete(op.googleId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += gPrintTitle(op.googleId) } }
-                    is BridgeOp.DeleteSamsung -> store.bridgeDelete(op.samsungId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += sPrintTitle(op.samsungId) } }
+                    is BridgeOp.DeleteGoogle -> store.bridgeDelete(op.googleId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += gPrintTitle(op.googleId); oloDeleted = oloDeleted + op.googleId } }
+                    is BridgeOp.DeleteSamsung -> store.bridgeDelete(op.samsungId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += sPrintTitle(op.samsungId); oloDeleted = oloDeleted + op.samsungId } }
                 }
             }.getOrDefault(false)
             if (!ok) failed++
@@ -245,6 +259,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         prefs.put(KEY_LINKS, null)
         prefs.put(KEY_REPORT, null)
         prefs.put(KEY_REFUSED, null)
+        prefs.put(KEY_OLO_DELETED, null)
     }
 
     private companion object {
@@ -258,5 +273,6 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         const val KEY_REPORT = "bridge.report"
         const val KEY_REFUSED = "bridge.refused"
         const val KEY_LOG = "bridge.log"
+        const val KEY_OLO_DELETED = "bridge.oloDeleted"
     }
 }

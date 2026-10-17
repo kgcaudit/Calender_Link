@@ -191,6 +191,23 @@ class BridgeTest {
         assertEquals(1, engine.restore(cfg, connected = true))
         assertEquals(3, store.count("S")); assertEquals(3, store.count("G"))
     }
+
+    @Test
+    fun deletionsThePersonMadeAreNotOfferedBack() = runTest {
+        val store = FakeBridgeStore()
+        store.put("S", "s1", f("영화 스트리트 파이터"))
+        store.put("S", "s2", f("회의", 9_000))
+        val engine = BridgeEngine(store, MemoryPreferences())
+        val cfg = BridgeConfig("S", "G")
+        engine.run(cfg)
+        // Deleted in Samsung Calendar: the phone keeps a DELETED row until it syncs.
+        val sid = engine.links.first { store.fields(it.samsungId).title == "영화 스트리트 파이터" }.samsungId
+        store.bridgeDelete(sid)
+        // The person agrees to delete the Google copy too; OLO deletes it.
+        engine.run(cfg, allowMassDelete = true)
+        assertEquals(1, store.count("G"))
+        assertTrue(engine.recoverable(cfg).isEmpty())
+    }
 }
 
 /** Two calendars in memory, enough of CalendarStore for the bridge. */
