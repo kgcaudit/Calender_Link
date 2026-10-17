@@ -499,8 +499,25 @@ private fun AccountCard(account: AccountGroup, nav: NavActions, shown: (String) 
             Column {
                 val ids = account.calendars.map { it.id }
                 val tri = triState(ids, shown)
-                Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    AccountTile(account.calendars.firstOrNull { !it.isHoliday } ?: account.calendars.first())
+                // The tile (or the account line) folds the account's calendars away.
+                val folded = nav.state.settings.folded[account.key] ?: false
+                val turn by animateFloatAsState(if (folded) -90f else 0f, tween(OloMotion.Short))
+                Row(
+                    Modifier.fillMaxWidth().clickable { nav.onFold(account.key, !folded) }
+                        .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box {
+                        AccountTile(account.calendars.firstOrNull { !it.isHoliday } ?: account.calendars.first())
+                        Box(
+                            Modifier.align(Alignment.BottomEnd).offset(x = 5.dp, y = 5.dp).size(16.dp)
+                                .background(cs.surfaceContainerLowest, CircleShape)
+                                .border(1.dp, cs.outlineVariant, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(OloIcons.ChevronDown, contentDescription = if (folded) "펼치기" else "접기", tint = cs.onSurfaceVariant, modifier = Modifier.size(12.dp).rotate(turn))
+                        }
+                    }
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(account.title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -511,6 +528,12 @@ private fun AccountCard(account: AccountGroup, nav: NavActions, shown: (String) 
                     }
                     TriStateCheckbox(state = tri.toggleable(), onClick = { nav.onShown(ids, tri != TriState.ALL) })
                 }
+                AnimatedVisibility(
+                    visible = !folded,
+                    enter = expandVertically(tween(OloMotion.Short)) + fadeIn(tween(OloMotion.Short)),
+                    exit = shrinkVertically(tween(OloMotion.Short)) + fadeOut(tween(OloMotion.Quick)),
+                ) {
+                Column {
                 HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.4f))
                 // Calendars hang from one guide line, a short branch to each.
                 val guide = cs.outlineVariant
@@ -532,6 +555,8 @@ private fun AccountCard(account: AccountGroup, nav: NavActions, shown: (String) 
                             }, lead = 14.dp)
                         }
                     }
+                }
+                }
                 }
             }
         }

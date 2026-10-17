@@ -56,6 +56,8 @@ class ScreenshotTest {
         render("month-drawer-dark", dark = true, drawer = true)
         render("bridge-sheet", dark = false, bridge = "16")
         render("month-drawer-bridged", dark = false, drawer = true, bridged = true, height = 3600)
+        // 일반 캘린더 open, the Samsung holiday account folded by its tile.
+        render("month-drawer-folded", dark = false, drawer = true, folded = "GENERAL=0,SAMSUNG/LOCAL/local.samsungholiday=1", height = 3600)
         render("view-agenda-dark", dark = true, view = ViewMode.AGENDA)
         // Halfway through a swipe to November: the page follows the finger.
         render("month-swipe", dark = false, swipe = 0.45f)
@@ -69,7 +71,7 @@ class ScreenshotTest {
     }
 
     private fun render(
-        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, bridged: Boolean = false, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
+        name: String, dark: Boolean, stage: MonthStage = MonthStage.FULL, drawer: Boolean = false, search: String? = null, swipe: Float? = null, bridge: String? = null, bridged: Boolean = false, folded: String? = null, width: Int = 1080, height: Int = 2340, density: Float = 2.625f,
         view: ViewMode = ViewMode.MONTH,
     ) {
         val scene = ImageComposeScene(width = width, height = height, density = Density(density)) {
@@ -80,6 +82,7 @@ class ScreenshotTest {
                     val c = remember {
                         val prefs = app.olo.calendar.model.MemoryPreferences()
                         if (bridged) { prefs.put("bridgeSamsungId", "16"); prefs.put("bridgeGoogleId", "6"); prefs.put("folded", "GENERAL=0") }
+                        if (folded != null) prefs.put("folded", folded)
                         CalendarController(SampleStore, scope, zone, prefs).also { it.setView(view) }
                     }
                     CalendarScreen(c, startStage = stage, startDrawerOpen = drawer, startSearch = search, startBridgeFor = bridge)
