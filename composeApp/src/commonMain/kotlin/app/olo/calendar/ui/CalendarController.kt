@@ -199,6 +199,36 @@ class CalendarController(
         }
     }
 
+    /** What vanished on one side and waits for a yes: (title, side it is still on). */
+    suspend fun bridgePending(): List<Pair<String, String>> = bridgeConfig()?.let { bridge.pendingDeletes(it) } ?: emptyList()
+
+    /** Keep what vanished on one side: copy it back instead of deleting the partner. */
+    fun keepBridgePending() {
+        val config = bridgeConfig() ?: return
+        scope.launch {
+            runCatching { bridge.keepPending(config) }.onSuccess { r -> _state.update { it.copy(bridgeReport = r, bridgeLinkedGoogle = bridge.linkedGoogleIds()) } }
+            store.requestSync()
+            reload()
+        }
+    }
+
+    suspend fun bridgeRecoverable(samsungId: String, googleId: String): List<String> =
+        bridge.recoverable(BridgeConfig(samsungId, googleId)).map { it.fields.title }
+
+    /** Brings back events a wrong deletion took, into Samsung Calendar. */
+    fun restoreDeleted(samsungId: String, googleId: String, done: (Int) -> Unit = {}) {
+        scope.launch {
+            _state.update { it.copy(bridgeProgress = 0 to 0) }
+            val n = runCatching { bridge.restore(BridgeConfig(samsungId, googleId), connected = _state.value.settings.bridgeOn) }.getOrDefault(0)
+            _state.update { it.copy(bridgeProgress = null, bridgeLinkedGoogle = bridge.linkedGoogleIds(), bridgeReport = bridge.lastReport ?: it.bridgeReport) }
+            store.requestSync()
+            reload()
+            done(n)
+        }
+    }
+
+    val bridgeLog: List<String> get() = bridge.log
+
     /** Stops the bridge; both calendars keep every event they hold. */
     fun stopBridge() {
         bridge.forget()

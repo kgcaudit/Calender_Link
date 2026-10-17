@@ -145,6 +145,7 @@ private fun Connect(
             }
         }
     }
+    if (t != null) RecoverCard(samsung.id, t.id, state, controller)
     val p = plan
     if (p == null) {
         Text("두 캘린더를 비교하는 중…", style = MaterialTheme.typography.bodyMedium)
@@ -221,17 +222,31 @@ private fun Connected(
             if (it.failed > 0) add("실패 ${it.failed}")
         }
         if (parts.isNotEmpty()) Text("지난번: " + parts.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (it.heldDeletes > 0) {
-            Surface(color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f), shape = MaterialTheme.shapes.small) {
-                Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                    Text("한쪽에서 일정 ${it.heldDeletes}개가 한꺼번에 사라져 다른 쪽 삭제를 멈췄습니다.", style = MaterialTheme.typography.bodySmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OloTextButton("삭제 진행", { controller.runBridge(allowMassDelete = true) })
-                    }
+    }
+    // The bridge never deletes on its own (0.8.3): what vanished on one side waits here.
+    var pending by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    LaunchedEffect(r?.atMillis, state.bridgeProgress == null) {
+        if (state.bridgeProgress == null) pending = runCatching { controller.bridgePending() }.getOrDefault(emptyList())
+    }
+    if (pending.isNotEmpty()) {
+        Surface(color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f), shape = MaterialTheme.shapes.small) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("한쪽에서만 사라진 일정 ${pending.size}개", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "다른 쪽에는 아직 남아 있습니다: " + pending.take(8).joinToString(", ") { it.first } + if (pending.size > 8) " 외 ${pending.size - 8}개" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text("직접 지운 것이 아니라면 '되살리기'를 누르세요. 남아 있는 쪽에서 다시 복제합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OloButton("되살리기", { controller.keepBridgePending(); pending = emptyList() }, enabled = state.bridgeProgress == null)
+                    OloTextButton("양쪽에서 지우기", { controller.runBridge(allowMassDelete = true); pending = emptyList() })
                 }
             }
         }
     }
+    val s = state.bridgeSamsung
+    if (s != null && google != null) RecoverCard(s.id, google.id, state, controller)
+    LogCard(controller)
     if (google != null && (google.accountName in state.sync.accountsWithSyncOff || google.accountName in state.sync.accountsNeedingAccess)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("${google.accountName} 동기화가 꺼져 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
@@ -249,5 +264,53 @@ private fun Connected(
         Spacer(Modifier.weight(1f))
         OloOutlinedButton("지금 맞추기", { controller.runBridge() }, enabled = state.bridgeProgress == null)
         OloButton("닫기", onDismiss)
+    }
+}
+
+/**
+ * Events a wrong deletion took that the phone still holds (deleted rows the sync
+ * adapter has not purged yet): brought back into Samsung Calendar.
+ */
+@Composable
+private fun RecoverCard(samsungId: String, googleId: String, state: CalendarUiState, controller: CalendarController) {
+    var found by remember { mutableStateOf<List<String>>(emptyList()) }
+    var restored by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(samsungId, googleId, state.bridgeProgress == null) {
+        if (state.bridgeProgress == null) found = runCatching { controller.bridgeRecoverable(samsungId, googleId) }.getOrDefault(emptyList())
+    }
+    restored?.let { Text("일정 ${it}개를 되살렸습니다.", style = MaterialTheme.typography.bodyMedium, color = OloTone.accent) }
+    if (found.isEmpty()) return
+    Surface(color = OloTone.container, shape = MaterialTheme.shapes.small) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("되살릴 수 있는 지워진 일정 ${found.size}개", style = MaterialTheme.typography.titleSmall)
+            Text(
+                found.take(10).joinToString(", ") + if (found.size > 10) " 외 ${found.size - 10}개" else "",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text("휴대폰에 아직 남아 있는 삭제 기록에서 찾았습니다. Samsung Calendar로 되살리고, 연결되어 있으면 구글에도 복제합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row { OloButton("${found.size}개 되살리기", { controller.restoreDeleted(samsungId, googleId) { n -> restored = n; found = emptyList() } }, enabled = state.bridgeProgress == null) }
+        }
+    }
+}
+
+/** The bridge's record: what each pass did, deletions by title. */
+@Composable
+private fun LogCard(controller: CalendarController) {
+    var open by remember { mutableStateOf(false) }
+    val lines = controller.bridgeLog
+    if (lines.isEmpty()) return
+    Text(
+        if (open) "최근 기록 접기" else "최근 기록 보기 (${lines.size})",
+        style = MaterialTheme.typography.labelLarge, color = OloTone.accent,
+        modifier = Modifier.clickable { open = !open }.padding(vertical = 6.dp),
+    )
+    if (open) {
+        lines.take(20).forEach { line ->
+            val at = line.substringBefore('|').toLongOrNull()
+            Text(
+                (at?.let { agoKo(it) + " · " } ?: "") + line.substringAfter('|'),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

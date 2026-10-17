@@ -65,17 +65,36 @@ class BridgeTest {
     }
 
     @Test
-    fun deletionsFollowButAMassDeleteWaitsForAYes() {
+    fun deletionsAlwaysWaitForAYes() {
         val one = item("s1", "치과")
-        val link = BridgeLink("s1", "g1", one.fingerprint, one.fingerprint)
-        assertEquals(listOf<BridgeOp>(BridgeOp.DeleteGoogle("g1", "s1")), planBridge(emptyList(), listOf(item("g1", "치과")), listOf(link)).ops)
+        val link = BridgeLink("s1", "g1", one.fingerprint, one.fingerprint, samsungConfirmed = true, googleConfirmed = true)
+        val p = planBridge(emptyList(), listOf(item("g1", "치과")), listOf(link))
+        assertTrue(p.ops.isEmpty())
+        assertEquals(listOf<BridgeOp>(BridgeOp.DeleteGoogle("g1", "s1")), p.pendingDeletes)
+        assertEquals(listOf<BridgeOp>(BridgeOp.DeleteGoogle("g1", "s1")), planBridge(emptyList(), listOf(item("g1", "치과")), listOf(link), allowMassDelete = true).ops)
+    }
 
-        val links = (1..20).map { BridgeLink("s$it", "g$it", one.fingerprint, one.fingerprint) }
-        val google = (1..20).map { item("g$it", "치과") }
-        val held = planBridge(emptyList(), google, links)
-        assertEquals(20, held.heldDeletes)
-        assertTrue(held.ops.none { it is BridgeOp.DeleteGoogle })
-        assertEquals(20, planBridge(emptyList(), google, links, allowMassDelete = true).deletes)
+    @Test
+    fun aCopyThatVanishedBeforeSyncingNeverDeletesTheOriginal() {
+        // 0.8.2 lost 103 events this way: Google dropped copies it never accepted,
+        // and the bridge took that for a deletion and removed the Samsung originals.
+        val s1 = item("s1", "음력 생일")
+        val link = BridgeLink("s1", "g1", s1.fingerprint, s1.fingerprint, samsungConfirmed = true, googleConfirmed = false)
+        val p = planBridge(listOf(s1), emptyList(), listOf(link))
+        assertTrue(p.pendingDeletes.isEmpty())
+        assertTrue(p.ops.none { it is BridgeOp.DeleteSamsung })
+        assertEquals(listOf(link), p.orphans)
+        // Offered to Google once more; if refused before with the same content, not again.
+        assertEquals(listOf<BridgeOp>(BridgeOp.CreateInGoogle("s1")), p.ops)
+        val again = planBridge(listOf(s1), emptyList(), emptyList(), refused = mapOf("s1" to s1.fingerprint))
+        assertTrue(again.ops.isEmpty()); assertEquals(1, again.unsupported)
+    }
+
+    @Test
+    fun lunarAndVendorRulesStayOnSamsung() {
+        val lunar = BridgeItem("s1", f("음력", rrule = "FREQ=YEARLY;X-SAMSUNG-LUNAR=1"))
+        val p = planBridge(listOf(lunar), emptyList(), emptyList())
+        assertTrue(p.ops.isEmpty()); assertEquals(1, p.unsupported)
     }
 
     @Test
@@ -143,14 +162,26 @@ class BridgeTest {
         val second = engine.run(cfg)
         assertEquals(0, second.toGoogle + second.toSamsung + second.deleted)
 
-        // Edit on the iPhone side reaches Samsung; delete on Samsung reaches Google.
+        // Edit on the iPhone side reaches Samsung.
         val gOfS1 = engine.links.first { it.samsungId == "s1" }.googleId
         store.put("G", gOfS1, f("치과 (변경)"))
         engine.run(cfg)
         assertEquals("치과 (변경)", store.fields("s1").title)
+        // A delete on Samsung waits for a yes; keeping it copies the survivor back.
         store.remove("s2")
         engine.run(cfg)
+        assertEquals(3, store.count("G"))
+        assertEquals(listOf("회의" to "google"), engine.pendingDeletes(cfg))
+        engine.keepPending(cfg)
+        assertEquals(3, store.count("S"))
+        // Deleting for real takes the person's yes.
+        store.remove(engine.links.first { store.fields(it.googleId).title == "회의" }.samsungId)
+        engine.run(cfg, allowMassDelete = true)
         assertEquals(2, store.count("G"))
+        // And what the phone still holds of a deleted event can be brought back.
+        assertTrue(engine.recoverable(cfg).any { it.fields.title == "회의" })
+        assertEquals(1, engine.restore(cfg, connected = true))
+        assertEquals(3, store.count("S")); assertEquals(3, store.count("G"))
     }
 }
 
@@ -177,7 +208,15 @@ private class FakeBridgeStore : CalendarStore {
         rows[targetId] = cal to src.second
         return targetId
     }
-    override suspend fun bridgeDelete(id: String) = rows.remove(id) != null
+    override suspend fun bridgeDelete(id: String) = rows.remove(id)?.also { gone[id] = it } != null
+    val gone = LinkedHashMap<String, Pair<String, BridgeFields>>()
+    override suspend fun bridgeDeleted(calendarId: String) = gone.filter { it.value.first == calendarId }.map { BridgeItem(it.key, it.value.second) }
+    override suspend fun bridgeRestore(deletedId: String, toCalendarId: String): String? {
+        val src = gone[deletedId] ?: return null
+        val id = "n${next++}"
+        rows[id] = toCalendarId to src.second
+        return id
+    }
 
     override suspend fun calendars(): List<CalendarInfo> = emptyList()
     override suspend fun occurrences(from: Instant, to: Instant): List<Occurrence> = emptyList()

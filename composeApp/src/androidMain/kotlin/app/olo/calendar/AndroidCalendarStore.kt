@@ -332,12 +332,12 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         Events._ID, Events.TITLE, Events.EVENT_LOCATION, Events.DESCRIPTION, Events.DTSTART, Events.DTEND,
         Events.DURATION, Events.EVENT_TIMEZONE, Events.EVENT_END_TIMEZONE, Events.ALL_DAY, Events.RRULE,
         Events.RDATE, Events.EXRULE, Events.EXDATE, Events.ORIGINAL_ID, Events.ORIGINAL_INSTANCE_TIME,
-        Events.STATUS, Events.AVAILABILITY, Events.ACCESS_LEVEL,
+        Events.STATUS, Events.AVAILABILITY, Events.ACCESS_LEVEL, Events._SYNC_ID,
     )
 
-    private fun sourceRows(calendarId: String): List<Map<String, Any?>> =
+    private fun sourceRows(calendarId: String, deleted: Boolean = false): List<Map<String, Any?>> =
         resolver.query(
-            Events.CONTENT_URI, moveColumns, "${Events.CALENDAR_ID} = ? AND ${Events.DELETED} = 0",
+            Events.CONTENT_URI, moveColumns, "${Events.CALENDAR_ID} = ? AND ${Events.DELETED} = ${if (deleted) 1 else 0}",
             arrayOf(calendarId), "${Events.DTSTART} ASC",
         ).list { c ->
             moveColumns.associateWith { col ->
@@ -479,8 +479,26 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         val exceptions = rows.filter { it.isException() }.groupBy { it[Events.ORIGINAL_ID].toString() }
         val alarms = remindersOf(rows.map { it.id() })
         rows.filterNot { it.isException() }.map { m ->
-            BridgeItem(m.id().toString(), fieldsOf(m, exceptions[m.id().toString()].orEmpty(), alarms[m.id()].orEmpty()))
+            BridgeItem(
+                m.id().toString(), fieldsOf(m, exceptions[m.id().toString()].orEmpty(), alarms[m.id()].orEmpty()),
+                synced = !(m[Events._SYNC_ID] as String?).isNullOrBlank(),
+            )
         }
+    }
+
+    override suspend fun bridgeDeleted(calendarId: String): List<BridgeItem> = io {
+        val rows = sourceRows(calendarId, deleted = true)
+        val exceptions = rows.filter { it.isException() }.groupBy { it[Events.ORIGINAL_ID].toString() }
+        rows.filterNot { it.isException() }.map { m ->
+            BridgeItem(m.id().toString(), fieldsOf(m, exceptions[m.id().toString()].orEmpty(), emptyList()))
+        }
+    }
+
+    override suspend fun bridgeRestore(deletedId: String, toCalendarId: String): String? = io {
+        val master = resolver.query(
+            Events.CONTENT_URI, moveColumns, "${Events._ID} = ?", arrayOf(deletedId), null,
+        ).list { c -> rowOf(c, moveColumns) }.firstOrNull() ?: return@io null
+        copyEventId(master, toCalendarId, keepRule = true, excluded = emptyList())?.toString()
     }
 
     private fun endOf(r: Map<String, Any?>): Long {

@@ -67,6 +67,15 @@ interface CalendarStore {
 
     suspend fun bridgeDelete(id: String): Boolean
 
+    /**
+     * Series deleted on this phone whose rows the sync adapter has not purged yet
+     * (DELETED = 1): what can still be brought back after a wrong deletion.
+     */
+    suspend fun bridgeDeleted(calendarId: String): List<app.olo.calendar.model.BridgeItem>
+
+    /** Re-creates a deleted series (see [bridgeDeleted]) in [toCalendarId]; returns the new id. */
+    suspend fun bridgeRestore(deletedId: String, toCalendarId: String): String?
+
     /** Asks the OS to sync now. The OS decides when it actually runs. */
     fun requestSync()
 

@@ -9,6 +9,8 @@ import app.olo.calendar.model.decodeLinks
 import app.olo.calendar.model.encodeLinks
 import app.olo.calendar.model.planBridge
 import app.olo.calendar.model.planDedupe
+import app.olo.calendar.model.decodeMap
+import app.olo.calendar.model.encodeMap
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
@@ -53,8 +55,66 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     /** Google-side ids of linked pairs: OLO shows those events once, from Samsung. */
     fun linkedGoogleIds(): Set<String> = links.map { it.googleId }.toSet()
 
+    private var refused: Map<String, String>
+        get() = decodeMap(prefs.get(KEY_REFUSED))
+        set(v) = prefs.put(KEY_REFUSED, encodeMap(v))
+
     suspend fun preview(config: BridgeConfig): BridgePlan =
-        planBridge(store.bridgeItems(config.samsungCalendarId), store.bridgeItems(config.googleCalendarId), links)
+        planBridge(store.bridgeItems(config.samsungCalendarId), store.bridgeItems(config.googleCalendarId), links, refused = refused)
+
+    /** What vanished on one side and waits for a yes, as (title, the side it is still on). */
+    suspend fun pendingDeletes(config: BridgeConfig): List<Pair<String, String>> {
+        val s = store.bridgeItems(config.samsungCalendarId).associateBy { it.id }
+        val g = store.bridgeItems(config.googleCalendarId).associateBy { it.id }
+        return preview(config).pendingDeletes.mapNotNull { op ->
+            when (op) {
+                is BridgeOp.DeleteSamsung -> s[op.samsungId]?.let { it.fields.title to "samsung" }
+                is BridgeOp.DeleteGoogle -> g[op.googleId]?.let { it.fields.title to "google" }
+                else -> null
+            }
+        }
+    }
+
+    /**
+     * Keeps the events that vanished on one side: forgets those pairs, so the
+     * next pass copies the survivors back instead of deleting them.
+     */
+    suspend fun keepPending(config: BridgeConfig): BridgeReport = lock.withLock {
+        val pending = preview(config).pendingDeletes
+        val keepS = pending.filterIsInstance<BridgeOp.DeleteSamsung>().map { it.samsungId }.toSet()
+        val keepG = pending.filterIsInstance<BridgeOp.DeleteGoogle>().map { it.googleId }.toSet()
+        links = links.filterNot { it.samsungId in keepS || it.googleId in keepG }
+        runLocked(config, allowMassDelete = false) { _, _ -> }
+    }
+
+    /**
+     * Deleted series still held by the phone (not yet purged by the sync
+     * adapter) on either side, that no live Samsung event matches: what a wrong
+     * deletion took and can still be brought back.
+     */
+    suspend fun recoverable(config: BridgeConfig): List<BridgeItem> {
+        val live = (store.bridgeItems(config.samsungCalendarId) + store.bridgeItems(config.googleCalendarId)).map { it.fingerprint }.toSet()
+        return (store.bridgeDeleted(config.samsungCalendarId) + store.bridgeDeleted(config.googleCalendarId))
+            .filter { it.fingerprint !in live }
+            .distinctBy { it.fingerprint }
+    }
+
+    /** Brings them back into Samsung Calendar (the home calendar); a pass then copies them to Google. */
+    suspend fun restore(config: BridgeConfig, connected: Boolean): Int = lock.withLock {
+        val items = recoverable(config)
+        var n = 0
+        items.forEach { if (store.bridgeRestore(it.id, config.samsungCalendarId) != null) n++ }
+        if (connected) runLocked(config, allowMassDelete = false) { _, _ -> }
+        appendLog("${Clock.System.now().toEpochMilliseconds()}|되살림 $n · " + items.take(12).joinToString(", ") { it.fields.title })
+        n
+    }
+
+    /** The last passes, newest first, for the bridge sheet's record. */
+    val log: List<String> get() = prefs.get(KEY_LOG).orEmpty().split('\n').filter { it.isNotBlank() }
+
+    private fun appendLog(line: String) {
+        prefs.put(KEY_LOG, (listOf(line) + log).take(40).joinToString("\n"))
+    }
 
     suspend fun run(
         config: BridgeConfig,
@@ -65,7 +125,13 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     private suspend fun runLocked(config: BridgeConfig, allowMassDelete: Boolean, onProgress: (Int, Int) -> Unit): BridgeReport {
         val samsung = store.bridgeItems(config.samsungCalendarId)
         val google = store.bridgeItems(config.googleCalendarId)
-        val plan = planBridge(samsung, google, links, allowMassDelete)
+        val plan = planBridge(samsung, google, links, allowMassDelete, refused)
+        // A copy Google dropped before it ever synced: remember the Samsung event so it
+        // is offered once more at most, not resent on every pass.
+        val gIds = google.map { it.id }.toSet()
+        val sById = samsung.associateBy { it.id }
+        plan.orphans.filter { it.googleId !in gIds }.mapNotNull { o -> sById[o.samsungId]?.let { o.samsungId to it.fingerprint } }
+            .takeIf { it.isNotEmpty() }?.let { refused = refused + it }
         val pairs = links.associateBy { it.samsungId }.toMutableMap()
         pairs.values.removeAll(plan.dropped.toSet())
         var failed = 0
@@ -80,6 +146,11 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val sPrint = samsung.associate { it.id to it.fingerprint }
         val gPrint = google.associate { it.id to it.fingerprint }
         val touched = HashSet<String>()
+        val deletedTitles = mutableListOf<String>()
+        val sTitle = samsung.associate { it.id to it.fields.title }
+        val gTitle = google.associate { it.id to it.fields.title }
+        fun sPrintTitle(id: String) = sTitle[id].orEmpty()
+        fun gPrintTitle(id: String) = gTitle[id].orEmpty()
         var sinceSave = 0
         fun pair(sid: String, gid: String) {
             val p = sPrint[sid] ?: gPrint[gid] ?: ""
@@ -99,8 +170,8 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
                         if (newS != op.samsungId) pairs.remove(op.samsungId)
                         pair(newS, op.googleId)
                     } != null
-                    is BridgeOp.DeleteGoogle -> store.bridgeDelete(op.googleId).also { if (it) { pairs.remove(op.samsungId); deleted++ } }
-                    is BridgeOp.DeleteSamsung -> store.bridgeDelete(op.samsungId).also { if (it) { pairs.remove(op.samsungId); deleted++ } }
+                    is BridgeOp.DeleteGoogle -> store.bridgeDelete(op.googleId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += gPrintTitle(op.googleId) } }
+                    is BridgeOp.DeleteSamsung -> store.bridgeDelete(op.samsungId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += sPrintTitle(op.samsungId) } }
                 }
             }.getOrDefault(false)
             if (!ok) failed++
@@ -117,7 +188,10 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
             val gi = gNow[l.googleId]
             when {
                 si == null && gi == null -> null
-                l.samsungId in touched && si != null && gi != null -> BridgeLink(l.samsungId, l.googleId, si.fingerprint, gi.fingerprint)
+                l.samsungId in touched && si != null && gi != null ->
+                    BridgeLink(l.samsungId, l.googleId, si.fingerprint, gi.fingerprint, l.samsungConfirmed || si.synced, l.googleConfirmed || gi.synced)
+                // Untouched pairs only learn that a side has reached its server.
+                si != null && gi != null -> l.copy(samsungConfirmed = l.samsungConfirmed || si.synced, googleConfirmed = l.googleConfirmed || gi.synced)
                 else -> l
             }
         }
@@ -127,6 +201,11 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
             conflicts = plan.conflicts, heldDeletes = plan.heldDeletes, failed = failed, linked = links.size,
         )
         prefs.put(KEY_REPORT, report.encode())
+        appendLog(
+            "${report.atMillis}|구글로 ${plan.toGoogle} · 삼성으로 ${plan.toSamsung} · 삭제 $deleted · 삭제 대기 ${plan.pendingDeletes.size}" +
+                " · 동기화 전 사라짐 ${plan.orphans.size} · 구글 불가 ${plan.unsupported} · 실패 $failed" +
+                (if (deletedTitles.isNotEmpty()) " | 지움: " + deletedTitles.take(12).joinToString(", ") else ""),
+        )
         return report
     }
 
@@ -155,6 +234,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     fun forget() {
         prefs.put(KEY_LINKS, null)
         prefs.put(KEY_REPORT, null)
+        prefs.put(KEY_REFUSED, null)
     }
 
     private companion object {
@@ -166,5 +246,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val lock = Mutex()
         const val KEY_LINKS = "bridge.links"
         const val KEY_REPORT = "bridge.report"
+        const val KEY_REFUSED = "bridge.refused"
+        const val KEY_LOG = "bridge.log"
     }
 }

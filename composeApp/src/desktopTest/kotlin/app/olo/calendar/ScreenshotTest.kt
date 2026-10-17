@@ -170,6 +170,8 @@ private object SampleStore : CalendarStore {
     override suspend fun bridgeCopy(sourceId: String, toCalendarId: String): String? = null
     override suspend fun bridgeReplace(sourceId: String, targetId: String): String? = null
     override suspend fun bridgeDelete(id: String) = false
+    override suspend fun bridgeDeleted(calendarId: String): List<app.olo.calendar.model.BridgeItem> = emptyList()
+    override suspend fun bridgeRestore(deletedId: String, toCalendarId: String): String? = null
     override suspend fun setMasterSync(on: Boolean) = true
     override fun requestSync() = Unit
     override fun changes(): Flow<Unit> = emptyFlow()

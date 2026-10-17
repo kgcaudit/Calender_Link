@@ -43,7 +43,12 @@ data class BridgeException(
 )
 
 /** One series as the bridge sees it. */
-data class BridgeItem(val id: String, val fields: BridgeFields) {
+/**
+ * [synced]: the sync adapter has given the row its server id (_SYNC_ID), i.e. the
+ * event really reached Google / Samsung Cloud. A row that vanishes before that was
+ * refused or replaced by the adapter, not deleted by a person (docs/07 §8).
+ */
+data class BridgeItem(val id: String, val fields: BridgeFields, val synced: Boolean = true) {
     val fingerprint: String = bridgeFingerprint(fields)
 
     /** What a person would call "the same event" when two calendars already hold copies. */
@@ -86,16 +91,36 @@ fun fnv64(s: String): String {
 }
 
 /** A pair the bridge keeps in step, with each side's fingerprint when they last agreed. */
-data class BridgeLink(val samsungId: String, val googleId: String, val samsungPrint: String, val googlePrint: String)
+data class BridgeLink(
+    val samsungId: String,
+    val googleId: String,
+    val samsungPrint: String,
+    val googlePrint: String,
+    /** Each side was once seen with its server id: only then is its disappearance a real deletion. */
+    val samsungConfirmed: Boolean = false,
+    val googleConfirmed: Boolean = false,
+)
 
 fun encodeLinks(links: List<BridgeLink>): String =
-    links.joinToString(";") { "${it.samsungId},${it.googleId},${it.samsungPrint},${it.googlePrint}" }
+    links.joinToString(";") {
+        "${it.samsungId},${it.googleId},${it.samsungPrint},${it.googlePrint},${if (it.samsungConfirmed) 1 else 0},${if (it.googleConfirmed) 1 else 0}"
+    }
 
 fun decodeLinks(s: String?): List<BridgeLink> =
     s.orEmpty().split(';').mapNotNull { part ->
         val p = part.split(',')
-        if (p.size != 4 || p[0].isEmpty() || p[1].isEmpty()) null else BridgeLink(p[0], p[1], p[2], p[3])
+        when {
+            p.size < 4 || p[0].isEmpty() || p[1].isEmpty() -> null
+            p.size >= 6 -> BridgeLink(p[0], p[1], p[2], p[3], p[4] == "1", p[5] == "1")
+            else -> BridgeLink(p[0], p[1], p[2], p[3])
+        }
     }
+
+/** Repeat rules Google cannot hold (Samsung's lunar and vendor extensions): such events stay on Samsung. */
+fun googleCanHold(f: BridgeFields): Boolean {
+    val r = f.rrule.uppercase()
+    return !r.contains("X-") && !r.contains("RSCALE") && !r.contains("LUNAR")
+}
 
 sealed interface BridgeOp {
     data class CreateInGoogle(val samsungId: String) : BridgeOp
@@ -119,6 +144,15 @@ data class BridgePlan(
     val dropped: List<BridgeLink>,
     /** Unpaired exact twins of an already paired event on the same side: not copied again. */
     val duplicates: Int = 0,
+    /**
+     * Deletions waiting for a person's yes. The bridge never deletes on its own
+     * (0.8.3, after 103 events were lost): it lists what vanished on one side.
+     */
+    val pendingDeletes: List<BridgeOp> = emptyList(),
+    /** A copy vanished before it ever reached its server: refused or replaced by the sync adapter. */
+    val orphans: List<BridgeLink> = emptyList(),
+    /** Events with repeat rules Google cannot hold: kept on Samsung only. */
+    val unsupported: Int = 0,
 ) {
     fun count(kind: (BridgeOp) -> Boolean) = ops.count(kind)
     val toGoogle get() = count { it is BridgeOp.CreateInGoogle || it is BridgeOp.UpdateGoogle }
@@ -140,12 +174,15 @@ fun planBridge(
     google: List<BridgeItem>,
     links: List<BridgeLink>,
     allowMassDelete: Boolean = false,
+    /** Samsung ids Google refused before (with the print they had): not sent again unless edited. */
+    refused: Map<String, String> = emptyMap(),
 ): BridgePlan {
     val s = samsung.associateBy { it.id }
     val g = google.associateBy { it.id }
     val ops = mutableListOf<BridgeOp>()
     val deletes = mutableListOf<BridgeOp>()
     val dropped = mutableListOf<BridgeLink>()
+    val orphans = mutableListOf<BridgeLink>()
     var conflicts = 0
     val linkedS = HashSet<String>()
     val linkedG = HashSet<String>()
@@ -157,6 +194,10 @@ fun planBridge(
         if (gi != null) linkedG += gi.id
         when {
             si == null && gi == null -> dropped += l
+            // Gone before it ever reached its server: the adapter refused or replaced it.
+            // Never a reason to delete the partner; the pair is dropped and re-formed.
+            si == null && !l.samsungConfirmed -> { orphans += l; linkedG -= l.googleId }
+            gi == null && !l.googleConfirmed -> { orphans += l; linkedS -= l.samsungId }
             si == null -> deletes += BridgeOp.DeleteGoogle(l.googleId, l.samsungId)
             gi == null -> deletes += BridgeOp.DeleteSamsung(l.samsungId, l.googleId)
             si.fingerprint == gi.fingerprint -> {
@@ -177,6 +218,7 @@ fun planBridge(
     val pairedSPrints = linkedS.mapNotNull { s[it]?.fingerprint }.toSet()
     val pairedGPrints = linkedG.mapNotNull { g[it]?.fingerprint }.toSet()
     var duplicates = 0
+    var unsupported = 0
     val freeG = google.filter { it.id !in linkedG }.groupBy { it.matchKey }.mapValues { it.value.toMutableList() }
     val usedG = HashSet<String>()
     for (si in samsung) {
@@ -188,6 +230,8 @@ fun planBridge(
                 ops += if (gi.fingerprint == si.fingerprint) BridgeOp.Agree(si.id, gi.id) else BridgeOp.UpdateGoogle(si.id, gi.id)
             }
             si.fingerprint in pairedSPrints -> duplicates++
+            !googleCanHold(si.fields) -> unsupported++
+            refused[si.id] == si.fingerprint -> unsupported++
             else -> ops += BridgeOp.CreateInGoogle(si.id)
         }
     }
@@ -197,9 +241,10 @@ fun planBridge(
         ops += BridgeOp.CreateInSamsung(gi.id)
     }
 
-    val held = if (!allowMassDelete && deletes.size > massDeleteLimit(links.size)) deletes.size else 0
-    if (held == 0) ops += deletes
-    return BridgePlan(ops, conflicts, held, dropped, duplicates)
+    // Deletions wait for a person, always.
+    val held = if (allowMassDelete) 0 else deletes.size
+    if (allowMassDelete) ops += deletes
+    return BridgePlan(ops, conflicts, held, dropped + orphans, duplicates, if (allowMassDelete) emptyList() else deletes, orphans, unsupported)
 }
 
 /**
