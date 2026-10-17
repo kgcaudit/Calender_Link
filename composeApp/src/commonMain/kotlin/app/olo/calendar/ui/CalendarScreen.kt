@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -509,27 +510,45 @@ private fun QuickAddBar(day: LocalDate, controller: CalendarController, onOpenEd
     }
 }
 
-/** Search over title, location and notes, a year back to two years ahead; results by date. */
+/**
+ * Search over title, location and notes across every year the calendars hold
+ * (and up to five years ahead). Results run by date; the list opens at today,
+ * so what is coming is in view and the past is a scroll up. The same event held
+ * by two calendars is one row with both calendars' dots.
+ */
 @Composable
 private fun SearchScreen(controller: CalendarController, initial: String, onClose: () -> Unit, onPick: (Occurrence) -> Unit) {
     var query by remember { mutableStateOf(initial) }
-    var results by remember { mutableStateOf<List<Occurrence>>(emptyList()) }
+    var hits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
     var searched by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     val use24 = LocalUse24Hour.current
+    val list = rememberLazyListState()
+    val today = controller.todayNow
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     LaunchedEffect(query) {
-        if (query.isBlank()) { results = emptyList(); searched = false; return@LaunchedEffect }
+        if (query.isBlank()) { hits = emptyList(); searched = false; busy = false; return@LaunchedEffect }
         delay(250)
-        results = runCatching { controller.search(query) }.getOrDefault(emptyList())
+        busy = true
+        hits = searchHits(runCatching { controller.search(query) }.getOrDefault(emptyList()))
+        busy = false
         searched = true
     }
+    val byDay = remember(hits) { hits.groupBy { it.first.firstDay }.toSortedMap(compareBy { it.toEpochDays() }) }
+    // Rows before today's first result: a summary line, then a header and the events of each earlier day.
+    val todayIndex = remember(byDay, today) {
+        var i = 1
+        for ((d, l) in byDay) { if (d >= today) return@remember i; i += 1 + l.size }
+        maxOf(i - 1, 0)
+    }
+    LaunchedEffect(byDay) { if (byDay.isNotEmpty()) list.scrollToItem(todayIndex) }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().height(OloLayout.TopBarHeight).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 BarIcon(OloIcons.Back, "검색 닫기", onClose)
                 Box(Modifier.weight(1f).padding(end = 12.dp), contentAlignment = Alignment.CenterStart) {
-                    if (query.isEmpty()) Text("일정 제목, 장소, 메모", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (query.isEmpty()) Text("일정 제목, 장소, 메모 · 전체 기간", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     BasicTextField(
                         value = query, onValueChange = { query = it }, singleLine = true,
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -539,22 +558,40 @@ private fun SearchScreen(controller: CalendarController, initial: String, onClos
                     )
                 }
             }
-            if (searched && results.isEmpty()) {
+            if (searched && hits.isEmpty()) {
                 Text("‘$query’ 일정이 없습니다.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp))
             }
-            LazyColumn(contentPadding = PaddingValues(horizontal = OloLayout.ContentMargin, vertical = 8.dp)) {
-                val byDay = results.groupBy { it.firstDay }.toSortedMap(compareBy { it.toEpochDays() })
-                byDay.forEach { (d, list) ->
+            LazyColumn(state = list, contentPadding = PaddingValues(horizontal = OloLayout.ContentMargin, vertical = 8.dp)) {
+                if (byDay.isNotEmpty()) item(key = "summary") {
+                    val years = byDay.firstKey().year to byDay.lastKey().year
+                    val past = hits.count { it.first.firstDay < today }
+                    Text(
+                        listOf(
+                            "${hits.size}건",
+                            if (years.first == years.second) "${years.first}년" else "${years.first}–${years.second}년",
+                            "지난 일정 $past",
+                            "다가올 일정 ${hits.size - past}",
+                        ).joinToString(" · ") + if (busy) " · 찾는 중" else "",
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                byDay.forEach { (d, dayHits) ->
                     item(key = "h" + d.toEpochDays()) {
+                        val isToday = d == today
                         Text(
-                            "${d.year}. ${d.monthNumber}. ${d.dayOfMonth}. (${d.dayOfWeek.koShort()})",
-                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            "${d.year}. ${d.monthNumber}. ${d.dayOfMonth}. (${d.dayOfWeek.koShort()})" + if (isToday) "  오늘" else "",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (d < today) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f) else if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (isToday) FontWeight.SemiBold else null,
                             modifier = Modifier.padding(top = 14.dp, bottom = 4.dp),
                         )
                     }
-                    items(list, key = { it.eventId + "@" + it.begin.toEpochMilliseconds() }) { o ->
+                    items(dayHits, key = { it.first.eventId + "@" + it.first.begin.toEpochMilliseconds() }) { (o, colors) ->
                         Row(Modifier.fillMaxWidth().clickable { onPick(o) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Tile(calendarColor(o.colorArgb), 12.dp)
+                            Box(Modifier.size(width = 12.dp + 6.dp * (colors.size - 1), height = 12.dp)) {
+                                colors.forEachIndexed { i, c -> Box(Modifier.offset(x = 6.dp * i)) { Tile(calendarColor(c), 12.dp) } }
+                            }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(o.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodyLarge)
@@ -570,6 +607,15 @@ private fun SearchScreen(controller: CalendarController, initial: String, onClos
         }
     }
 }
+
+/** One search row: the event, and the colours of every calendar that holds the same event. */
+private typealias SearchHit = Pair<Occurrence, List<Int>>
+
+/** The same title at the same time in several calendars (copies, unlinked twins) is one row. */
+internal fun searchHits(found: List<Occurrence>): List<Pair<Occurrence, List<Int>>> =
+    found.groupBy { listOf(it.title.trim(), it.allDay, it.begin, it.end) }.values
+        .map { same -> same.first() to same.map { it.colorArgb }.distinct() }
+        .sortedBy { it.first.begin }
 
 /** Tap on the title: jump to any month. */
 @Composable

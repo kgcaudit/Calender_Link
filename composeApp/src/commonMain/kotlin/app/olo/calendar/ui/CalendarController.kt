@@ -124,7 +124,7 @@ class CalendarController(
     val zone: TimeZone = TimeZone.currentSystemDefault(),
     private val prefs: Preferences = MemoryPreferences(),
 ) {
-    private val todayNow: LocalDate get() = Clock.System.now().toLocalDateTime(zone).date
+    val todayNow: LocalDate get() = Clock.System.now().toLocalDateTime(zone).date
 
     private val _state = MutableStateFlow(
         todayNow.let {
@@ -398,14 +398,17 @@ class CalendarController(
 
     suspend fun load(id: String): StoredEvent? = store.event(id)
 
-    /** Events from a year back to two years ahead whose text contains [query]. */
+    /**
+     * Every event whose text contains [query], however long ago; ahead, up to
+     * [SEARCH_YEARS_AHEAD] years (a series that never ends would go on forever).
+     * Shown and coloured as the calendar views show them: hidden calendars left
+     * out, a bridged Google twin folded into its Samsung event.
+     */
     suspend fun search(query: String): List<Occurrence> {
-        val t = todayNow
-        val from = t.plus(DatePeriod(years = -1)).atStartOfDayIn(zone)
-        val to = t.plus(DatePeriod(years = 2)).atStartOfDayIn(zone)
+        val from = LocalDate(1900, 1, 1).atStartOfDayIn(zone)
+        val to = todayNow.plus(DatePeriod(years = SEARCH_YEARS_AHEAD)).atStartOfDayIn(zone)
         val s = _state.value
-        val hidden = s.calendars.filter { !s.settings.isShown(it) }.map { it.id }.toSet()
-        return store.search(query, from, to).filter { it.calendarId !in hidden }
+        return shownOf(store.search(query, from, to), s.calendars, s.settings, s.bridgeLinkedGoogle)
     }
 
     /**
@@ -503,6 +506,9 @@ private fun recolored(calendars: List<CalendarInfo>, settings: AppSettings): Lis
     else calendars.map { c -> settings.hueOf(c.id)?.let { c.copy(colorArgb = it.argb) } ?: c }
 
 /** The occurrences OLO draws: hidden calendars out, OLO-chosen colours in. */
+/** How far ahead search follows a repeating event (docs/04 §검색). */
+const val SEARCH_YEARS_AHEAD = 5
+
 private fun shownOf(all: List<Occurrence>, calendars: List<CalendarInfo>, settings: AppSettings, bridged: Set<String> = emptySet()): List<Occurrence> {
     val hidden = calendars.filter { !settings.isShown(it) }.map { it.id }.toSet()
     // A bridged pair is one event: show the Samsung copy, unless Samsung Calendar is hidden.

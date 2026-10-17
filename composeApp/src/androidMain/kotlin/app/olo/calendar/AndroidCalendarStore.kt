@@ -96,10 +96,34 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         if (q.isEmpty()) return@io emptyList()
         // LIKE with the user's text escaped, so % and _ are matched literally.
         val like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        val args = arrayOf(like, like, like)
+        // The Instances table only answers for a window it has expanded, so first ask the
+        // Events table where the matches actually lie (first start, last end; a series that
+        // never ends runs to [to]) and expand just that span, however far back it reaches.
+        val span = resolver.query(
+            Events.CONTENT_URI, arrayOf(Events.DTSTART, Events.DTEND, Events.LAST_DATE, Events.RRULE),
+            "${Events.DELETED} = 0 AND (${Events.TITLE} LIKE ? ESCAPE '\\' OR ${Events.EVENT_LOCATION} LIKE ? ESCAPE '\\' OR ${Events.DESCRIPTION} LIKE ? ESCAPE '\\')",
+            args, null,
+        ).list { c ->
+            val start = c.long(Events.DTSTART)
+            val repeats = c.str(Events.RRULE).isNotBlank()
+            val last = when {
+                !c.isNull(c.getColumnIndexOrThrow(Events.LAST_DATE)) -> c.long(Events.LAST_DATE)
+                repeats -> Long.MAX_VALUE
+                !c.isNull(c.getColumnIndexOrThrow(Events.DTEND)) -> c.long(Events.DTEND)
+                else -> start + 86_400_000L
+            }
+            start to last
+        }
+        if (span.isEmpty()) return@io emptyList()
+        // A day of slack on both sides for all-day rows stored at UTC midnight.
+        val first = maxOf(from.toEpochMilliseconds(), span.minOf { it.first } - 86_400_000L)
+        val last = minOf(to.toEpochMilliseconds(), span.maxOf { it.second }.let { if (it == Long.MAX_VALUE) it else it + 86_400_000L })
+        if (first >= last) return@io emptyList()
         instances(
-            from, to,
+            Instant.fromEpochMilliseconds(first), Instant.fromEpochMilliseconds(last),
             "(${Instances.TITLE} LIKE ? ESCAPE '\\' OR ${Instances.EVENT_LOCATION} LIKE ? ESCAPE '\\' OR ${Instances.DESCRIPTION} LIKE ? ESCAPE '\\')",
-            arrayOf(like, like, like),
+            args,
         )
     }
 
