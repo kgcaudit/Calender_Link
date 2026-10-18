@@ -613,6 +613,38 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         }
     }
 
+    override suspend fun bridgeCreate(fields: BridgeFields, toCalendarId: String): String? = io {
+        val f = fields
+        val repeats = f.rrule.isNotBlank()
+        // Cancelled occurrences come back as exclusions; changed ones keep the series' own times.
+        val excluded = (f.exdates + f.exceptions.filter { it.cancelled }.map { it.originalStart }).distinct().map { Instant.fromEpochMilliseconds(it) }
+        val v = ContentValues().apply {
+            put(Events.CALENDAR_ID, toCalendarId.toLong())
+            put(Events.TITLE, f.title)
+            put(Events.EVENT_LOCATION, f.location)
+            put(Events.DESCRIPTION, f.description)
+            put(Events.DTSTART, f.startMillis)
+            put(Events.ALL_DAY, if (f.allDay) 1 else 0)
+            put(Events.EVENT_TIMEZONE, if (f.allDay) "UTC" else f.timeZone.ifBlank { zone.id })
+            if (repeats) {
+                put(Events.RRULE, f.rrule.removePrefix("RRULE:"))
+                mergeExdates(null, excluded)?.let { put(Events.EXDATE, it) }
+                put(Events.DURATION, if (f.allDay) "P${maxOf(1L, (f.endMillis - f.startMillis) / 86_400_000L)}D" else "P${maxOf(0L, (f.endMillis - f.startMillis) / 1000)}S")
+            } else {
+                put(Events.DTEND, f.endMillis)
+            }
+        }
+        val id = runCatching { resolver.insert(Events.CONTENT_URI, v)?.let(ContentUris::parseId) }.getOrNull() ?: return@io null
+        f.reminderMinutes.distinct().forEach { m ->
+            runCatching {
+                resolver.insert(Reminders.CONTENT_URI, ContentValues().apply {
+                    put(Reminders.EVENT_ID, id); put(Reminders.MINUTES, m); put(Reminders.METHOD, Reminders.METHOD_ALERT)
+                })
+            }
+        }
+        id.toString()
+    }
+
     override suspend fun bridgeCopy(sourceId: String, toCalendarId: String): String? = io { copySeries(sourceId.toLong(), toCalendarId)?.toString() }
 
     private fun copySeries(sourceId: Long, toCalendarId: String): Long? {

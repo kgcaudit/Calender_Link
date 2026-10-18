@@ -77,6 +77,13 @@ interface CalendarStore {
     suspend fun bridgeRestore(deletedId: String, toCalendarId: String): String?
 
     /**
+     * Creates a series from saved [fields] (title, times, rule, exclusions,
+     * reminders) in [toCalendarId]: how an automatic deletion is undone after the
+     * phone has purged the deleted row (docs/07 §18). Returns the new id.
+     */
+    suspend fun bridgeCreate(fields: app.olo.calendar.model.BridgeFields, toCalendarId: String): String? = null
+
+    /**
      * Asks the OS to sync calendar accounts now; the OS decides when it runs.
      * Leaves out [exclude] ("type/name" keys) and every account whose calendar
      * sync is off on the phone: a manual request would otherwise override that

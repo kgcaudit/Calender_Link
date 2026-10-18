@@ -47,6 +47,15 @@ interface SystemSettings {
 
     /** The bridge was switched on or off: the platform (re)schedules its background passes. */
     fun bridgeChanged(on: Boolean) {}
+
+    /** Whether the phone lets OLO's background passes run unhindered (battery optimisation off). */
+    val batteryUnrestricted: Boolean get() = true
+
+    /**
+     * Asks to exempt OLO from battery optimisation, so the bridge keeps running
+     * while closed (docs/07 §18); already exempt, opens the app's own settings page.
+     */
+    fun askBatteryUnrestricted() {}
 }
 
 @Composable

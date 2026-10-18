@@ -448,6 +448,8 @@ private fun MainSection(samsung: CalendarInfo, google: CalendarInfo, rest: List<
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                         val (label, color) = when {
                             s.bridgeProgress != null -> "맞추는 중" to green
+                            s.bridgeError != null -> "맞춤 실패" to cs.error
+                            s.bridgeStaleFor != null -> "자동 맞춤 멈춰 있었음" to cs.error
                             s.bridgeDuplicates > 0 -> "중복 ${s.bridgeDuplicates}개" to cs.error
                             issue -> "확인 필요" to cs.error
                             // The same account the Google group's card excludes: shown here too.

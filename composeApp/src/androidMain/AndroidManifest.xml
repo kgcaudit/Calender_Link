@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
     <!-- "지금 동기화" waits while accounts sync (isSyncActive / isSyncPending); a normal permission. -->
     <uses-permission android:name="android.permission.READ_SYNC_STATS" />
+    <!-- Lets OLO ask once to run the bridge in the background (docs/07 §18); the person decides. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:enableOnBackInvokedCallback="true"

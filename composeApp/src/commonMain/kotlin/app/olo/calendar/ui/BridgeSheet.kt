@@ -61,6 +61,9 @@ fun BridgeSheet(
     onEnableSync: (String) -> Unit,
     onChanged: (Boolean) -> Unit,
     onDismiss: () -> Unit,
+    /** Whether background passes may run freely, and the way to allow it (docs/07 §18). */
+    batteryUnrestricted: Boolean = true,
+    onBattery: () -> Unit = {},
 ) {
     if (samsung == null) { onDismiss(); return }
     val connected = state.settings.bridgeSamsungId == samsung.id && state.settings.bridgeOn
@@ -77,8 +80,8 @@ fun BridgeSheet(
                 Text("맞추는 중… $d / $t", style = MaterialTheme.typography.bodyLarge)
                 LinearProgressIndicator(progress = { if (t == 0) 0f else d.toFloat() / t }, modifier = Modifier.fillMaxWidth())
             }
-            if (connected) Connected(state, controller, onEnableSync, onChanged, onDismiss)
-            else Connect(samsung, state, controller, onEnableSync, onChanged, onDismiss)
+            if (connected) Connected(state, controller, onEnableSync, onChanged, onDismiss, batteryUnrestricted, onBattery)
+            else Connect(samsung, state, controller, onEnableSync, onChanged, onDismiss, batteryUnrestricted, onBattery)
         }
     }
 }
@@ -113,6 +116,8 @@ private fun Connect(
     onEnableSync: (String) -> Unit,
     onChanged: (Boolean) -> Unit,
     onDismiss: () -> Unit,
+    batteryUnrestricted: Boolean,
+    onBattery: () -> Unit,
 ) {
     val targets = state.googleTargets
     var target by remember { mutableStateOf(targets.firstOrNull { it.isPrimary } ?: targets.firstOrNull()) }
@@ -167,7 +172,8 @@ private fun Connect(
         OloButton("연결 시작", enabled = t != null && p != null && state.bridgeProgress == null, onClick = {
             val to = target ?: return@OloButton
             // Background passes start only after the first one has recorded its pairs.
-            controller.startBridge(samsung.id, to.id) { onChanged(true) }
+            // Connected: ask once to run in the background, or the bridge sleeps when OLO is closed.
+            controller.startBridge(samsung.id, to.id) { onChanged(true); if (!batteryUnrestricted) onBattery() }
         })
     }
 }
@@ -182,6 +188,47 @@ private fun PlanLine(label: String, n: Int) {
     }
 }
 
+/**
+ * The bridge runs while OLO is closed only if the phone lets it (docs/07 §18).
+ * Shown when the background passes fell behind (over 30 minutes when OLO
+ * opened) or the last pass failed; one tap goes to the setting that fixes it.
+ */
+@Composable
+private fun BackgroundCard(state: CalendarUiState, batteryUnrestricted: Boolean, onBattery: () -> Unit, controller: CalendarController) {
+    val stale = state.bridgeStaleFor
+    val error = state.bridgeError
+    if (stale == null && error == null && batteryUnrestricted) return
+    val cs = MaterialTheme.colorScheme
+    Surface(color = cs.errorContainer.copy(alpha = 0.55f), shape = MaterialTheme.shapes.small) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            when {
+                error != null -> {
+                    Text("마지막 맞춤이 실패했습니다", style = MaterialTheme.typography.titleSmall)
+                    Text(error, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                    OloTextButton("다시 맞추기", { controller.runBridge() }, enabled = state.bridgeProgress == null)
+                }
+                else -> {
+                    val hours = (stale ?: 0L) / 3_600_000L
+                    Text(
+                        if (stale != null) "앱을 닫아 둔 동안 자동 맞춤이 ${if (hours >= 1) "${hours}시간" else "${stale / 60_000L}분"} 멈춰 있었습니다"
+                        else "앱을 닫으면 자동 맞춤이 멈출 수 있습니다",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        if (batteryUnrestricted) "배터리는 제한 없음입니다. 설정 → 배터리 → 백그라운드 사용 제한에서 '잠자는 앱'에 OLO가 있으면 빼 주세요."
+                        else "Samsung 절전 관리가 백그라운드 작업을 막고 있습니다. 절전 예외로 두면 닫아 둔 동안에도 맞춥니다.",
+                        style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OloButton(if (batteryUnrestricted) "앱 설정 열기" else "절전 예외로 두기", onBattery)
+                        if (stale != null) OloTextButton("확인", { controller.dismissBridgeStale() })
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun Connected(
     state: CalendarUiState,
@@ -189,9 +236,12 @@ private fun Connected(
     onEnableSync: (String) -> Unit,
     onChanged: (Boolean) -> Unit,
     onDismiss: () -> Unit,
+    batteryUnrestricted: Boolean,
+    onBattery: () -> Unit,
 ) {
     val google = state.bridgeGoogle
     val r: BridgeReport? = state.bridgeReport
+    BackgroundCard(state, batteryUnrestricted, onBattery, controller)
     var dupes by remember { mutableStateOf(emptyList<String>() to emptyList<String>()) }
     LaunchedEffect(r?.atMillis, state.bridgeProgress == null) {
         if (state.bridgeProgress == null) dupes = runCatching { controller.bridgeDuplicates() }.getOrDefault(emptyList<String>() to emptyList())
@@ -225,7 +275,28 @@ private fun Connected(
         }
         if (parts.isNotEmpty()) Text("지난번: " + parts.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    // The bridge never deletes on its own (0.8.3): what vanished on one side waits here.
+    // A few deletions carry over by themselves (0.10.2); for a day they can be undone here.
+    var autoDeleted by remember { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(r?.atMillis, state.bridgeProgress == null) {
+        if (state.bridgeProgress == null) autoDeleted = controller.bridgeAutoDeleted()
+    }
+    if (autoDeleted.isNotEmpty()) {
+        Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.small) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("함께 지운 일정 ${autoDeleted.size}개", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    autoDeleted.take(6).joinToString(", ") + if (autoDeleted.size > 6) " 외 ${autoDeleted.size - 6}개" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text("한쪽에서 지운 일정을 다른 쪽에서도 지웠습니다. 24시간 동안 되돌릴 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OloTextButton("되돌리기", { controller.undoBridgeAutoDeleted(); autoDeleted = emptyList() }, enabled = state.bridgeProgress == null)
+                    OloTextButton("확인", { controller.keepBridgeAutoDeleted(); autoDeleted = emptyList() })
+                }
+            }
+        }
+    }
+    // Many vanishing at once (more than AUTO_DELETE_LIMIT) waits here for a person (0.8.3).
     var pending by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     LaunchedEffect(r?.atMillis, state.bridgeProgress == null) {
         if (state.bridgeProgress == null) pending = runCatching { controller.bridgePending() }.getOrDefault(emptyList())

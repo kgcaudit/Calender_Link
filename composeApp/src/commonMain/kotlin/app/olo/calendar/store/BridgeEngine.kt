@@ -1,6 +1,9 @@
 package app.olo.calendar.store
 
+import app.olo.calendar.model.BridgeFields
 import app.olo.calendar.model.BridgeItem
+import app.olo.calendar.model.decodeFields
+import app.olo.calendar.model.encodeFields
 import app.olo.calendar.model.BridgeLink
 import app.olo.calendar.model.BridgeOp
 import app.olo.calendar.model.BridgePlan
@@ -126,6 +129,48 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         n
     }
 
+    /**
+     * Events a pass deleted by itself (docs/07 §18: a person deleted them on the
+     * other side, a few at a time) in the last [UNDO_HOURS] hours, newest first,
+     * with when. Kept as fields, so undo works after the phone purges the row.
+     */
+    val recentAutoDeleted: List<Pair<Long, BridgeFields>>
+        get() {
+            val since = Clock.System.now().toEpochMilliseconds() - UNDO_HOURS * 3_600_000L
+            return prefs.get(KEY_AUTO_DELETED).orEmpty().split(RS).mapNotNull { line ->
+                val at = line.substringBefore('|').toLongOrNull() ?: return@mapNotNull null
+                if (at < since) null else decodeFields(line.substringAfter('|'))?.let { at to it }
+            }
+        }
+
+    private fun keepForUndo(f: BridgeFields) {
+        val line = "${Clock.System.now().toEpochMilliseconds()}|${encodeFields(f)}"
+        val kept = listOf(line) + prefs.get(KEY_AUTO_DELETED).orEmpty().split(RS).filter { it.isNotBlank() }
+        prefs.put(KEY_AUTO_DELETED, kept.take(50).joinToString(RS))
+    }
+
+    /**
+     * Undoes the recent automatic deletions: each comes back into Samsung Calendar
+     * (unless an event like it is already there) and a pass copies it to Google.
+     */
+    suspend fun undoAutoDeleted(config: BridgeConfig): Int = lock.withLock {
+        val items = recentAutoDeleted
+        val live = (store.bridgeItems(config.samsungCalendarId) + store.bridgeItems(config.googleCalendarId))
+            .map { it.twinKey }.toMutableSet()
+        var n = 0
+        items.forEach { (_, f) ->
+            val key = BridgeItem("", f).twinKey
+            if (key !in live && store.bridgeCreate(f, config.samsungCalendarId) != null) { n++; live += key }
+        }
+        prefs.put(KEY_AUTO_DELETED, null)
+        runLocked(config, allowMassDelete = false) { _, _ -> }
+        appendLog("${Clock.System.now().toEpochMilliseconds()}|자동 삭제 되돌림 $n · " + items.take(12).joinToString(", ") { it.second.title })
+        n
+    }
+
+    /** Lets the recent automatic deletions stand: the undo line goes away. */
+    fun keepAutoDeleted() = prefs.put(KEY_AUTO_DELETED, null)
+
     /** The last passes, newest first, for the bridge sheet's record. */
     val log: List<String> get() = prefs.get(KEY_LOG).orEmpty().split('\n').filter { it.isNotBlank() }
 
@@ -142,11 +187,12 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     private suspend fun runLocked(config: BridgeConfig, allowMassDelete: Boolean, onProgress: (Int, Int) -> Unit): BridgeReport {
         val samsung = store.bridgeItems(config.samsungCalendarId)
         val google = store.bridgeItems(config.googleCalendarId)
-        val plan = planBridge(samsung, google, links, allowMassDelete, refused)
+        val plan = planBridge(samsung, google, links, allowMassDelete, refused = refused)
         // A copy Google dropped before it ever synced: remember the Samsung event so it
         // is offered once more at most, not resent on every pass.
         val gIds = google.map { it.id }.toSet()
         val sById = samsung.associateBy { it.id }
+        val gById = google.associateBy { it.id }
         plan.orphans.filter { it.googleId !in gIds }.mapNotNull { o -> sById[o.samsungId]?.let { o.samsungId to it.fingerprint } }
             .takeIf { it.isNotEmpty() }?.let { refused = refused + it }
         val pairs = links.associateBy { it.samsungId }.toMutableMap()
@@ -187,8 +233,15 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
                         if (newS != op.samsungId) pairs.remove(op.samsungId)
                         pair(newS, op.googleId)
                     } != null
-                    is BridgeOp.DeleteGoogle -> store.bridgeDelete(op.googleId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += gPrintTitle(op.googleId); oloDeleted = oloDeleted + op.googleId } }
-                    is BridgeOp.DeleteSamsung -> store.bridgeDelete(op.samsungId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += sPrintTitle(op.samsungId); oloDeleted = oloDeleted + op.samsungId } }
+                    is BridgeOp.DeleteGoogle -> {
+                        // Keep what is about to go, so a deletion carried over by itself can be undone.
+                        if (!allowMassDelete) gById[op.googleId]?.let { keepForUndo(it.fields) }
+                        store.bridgeDelete(op.googleId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += gPrintTitle(op.googleId); oloDeleted = oloDeleted + op.googleId } }
+                    }
+                    is BridgeOp.DeleteSamsung -> {
+                        if (!allowMassDelete) sById[op.samsungId]?.let { keepForUndo(it.fields) }
+                        store.bridgeDelete(op.samsungId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += sPrintTitle(op.samsungId); oloDeleted = oloDeleted + op.samsungId } }
+                    }
                 }
             }.getOrDefault(false)
             if (!ok) failed++
@@ -260,6 +313,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         prefs.put(KEY_REPORT, null)
         prefs.put(KEY_REFUSED, null)
         prefs.put(KEY_OLO_DELETED, null)
+        prefs.put(KEY_AUTO_DELETED, null)
     }
 
     private companion object {
@@ -274,5 +328,9 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         const val KEY_REFUSED = "bridge.refused"
         const val KEY_LOG = "bridge.log"
         const val KEY_OLO_DELETED = "bridge.oloDeleted"
+        const val KEY_AUTO_DELETED = "bridge.autoDeleted"
+        const val RS = "\u001C"
+        /** How long an automatic deletion can be undone. */
+        const val UNDO_HOURS = 24L
     }
 }

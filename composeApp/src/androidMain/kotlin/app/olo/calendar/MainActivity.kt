@@ -88,6 +88,21 @@ class MainActivity : ComponentActivity(), PermissionGate, SystemSettings {
         if (on) BridgeScheduler.schedule(this) else BridgeScheduler.cancel(this)
     }
 
+    override val batteryUnrestricted: Boolean
+        get() = (getSystemService(POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(packageName)
+
+    /**
+     * The system's one-tap "allow to run in background" prompt; if a phone hides
+     * it, the app's own page, where One UI keeps 배터리 → 제한 없음.
+     */
+    @android.annotation.SuppressLint("BatteryLife")
+    override fun askBatteryUnrestricted() {
+        // Already exempt: Samsung's 잠자는 앱 list lives on the app's own battery page.
+        if (batteryUnrestricted) { openSettings(); return }
+        runCatching { startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) }
+            .onFailure { openSettings() }
+    }
+
     override fun openSettings() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
     }

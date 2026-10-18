@@ -176,6 +176,14 @@ data class BridgePlan(
 fun massDeleteLimit(linked: Int): Int = maxOf(5, linked / 5)
 
 /**
+ * A pass carries deletions over by itself when there are at most this many
+ * (docs/07 §18): a person deleting an event or two. More in one pass looks like
+ * the 0.8.3 loss (a calendar cleared, an account gone) and waits for a yes.
+ * Only pairs both sides had confirmed reach this point; the rest are orphans.
+ */
+const val AUTO_DELETE_LIMIT = 3
+
+/**
  * What one pass of the bridge does. Pure: the engine reads both calendars,
  * calls this, then carries the ops out.
  */
@@ -184,6 +192,8 @@ fun planBridge(
     google: List<BridgeItem>,
     links: List<BridgeLink>,
     allowMassDelete: Boolean = false,
+    /** Deletions a pass carries over without asking, if no more than this many ([AUTO_DELETE_LIMIT]). */
+    autoDeleteLimit: Int = AUTO_DELETE_LIMIT,
     /** Samsung ids Google refused before (with the print they had): not sent again unless edited. */
     refused: Map<String, String> = emptyMap(),
 ): BridgePlan {
@@ -251,10 +261,11 @@ fun planBridge(
         ops += BridgeOp.CreateInSamsung(gi.id)
     }
 
-    // Deletions wait for a person, always.
-    val held = if (allowMassDelete) 0 else deletes.size
-    if (allowMassDelete) ops += deletes
-    return BridgePlan(ops, conflicts, held, dropped + orphans, duplicates, if (allowMassDelete) emptyList() else deletes, orphans, unsupported)
+    // A few deletions go through (and are kept for undo by the engine); many wait for a person.
+    val carry = allowMassDelete || deletes.size <= autoDeleteLimit
+    if (carry) ops += deletes
+    val held = if (carry) 0 else deletes.size
+    return BridgePlan(ops, conflicts, held, dropped + orphans, duplicates, if (carry) emptyList() else deletes, orphans, unsupported)
 }
 
 /**
@@ -306,3 +317,35 @@ private fun parseIcalTime(v: String, zone: kotlinx.datetime.TimeZone): Long? = r
         ldt.toInstant(z).toEpochMilliseconds()
     }
 }.getOrNull()
+
+
+// --- undo for automatic deletions (docs/07 §18) ----------------------------------
+
+private const val F = '\u001F'
+private const val L = '\u001E'
+private const val E = '\u001D'
+private fun clean(t: String) = t.filterNot { it == F || it == L || it == E || it == '\u001C' }
+
+/** One line of text for a series' fields, so a deleted event can be made again after its row is purged. */
+fun encodeFields(f: BridgeFields): String = listOf(
+    clean(f.title), clean(f.location), clean(f.description), f.allDay.toString(), f.startMillis.toString(), f.endMillis.toString(),
+    clean(f.timeZone), clean(f.rrule), f.exdates.joinToString(L.toString()), f.reminderMinutes.joinToString(L.toString()),
+    f.exceptions.joinToString(L.toString()) { listOf(it.originalStart, if (it.cancelled) 1 else 0, clean(it.title), it.startMillis, it.endMillis).joinToString(E.toString()) },
+).joinToString(F.toString())
+
+fun decodeFields(s: String): BridgeFields? {
+    val p = s.split(F)
+    if (p.size < 11) return null
+    fun longs(t: String) = t.split(L).mapNotNull { it.toLongOrNull() }
+    return runCatching {
+        BridgeFields(
+            title = p[0], location = p[1], description = p[2], allDay = p[3] == "true",
+            startMillis = p[4].toLong(), endMillis = p[5].toLong(), timeZone = p[6], rrule = p[7],
+            exdates = longs(p[8]), reminderMinutes = p[9].split(L).mapNotNull { it.toIntOrNull() },
+            exceptions = p[10].split(L).filter { it.isNotEmpty() }.mapNotNull { e ->
+                val q = e.split(E)
+                if (q.size < 5) null else BridgeException(q[0].toLong(), q[1] == "1", q[2], q[3].toLong(), q[4].toLong())
+            },
+        )
+    }.getOrNull()
+}

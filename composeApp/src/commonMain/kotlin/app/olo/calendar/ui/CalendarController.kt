@@ -70,6 +70,14 @@ data class CalendarUiState(
     /** Google-side ids of bridged pairs: shown once, from Samsung (docs/07). */
     val bridgeLinkedGoogle: Set<String> = emptySet(),
     val bridgeReport: BridgeReport? = null,
+    /**
+     * When OLO opened, the last pass was this old (millis since) — over 30
+     * minutes means the background passes did not run while OLO was closed
+     * (Samsung's battery management, usually). Null when they kept up.
+     */
+    val bridgeStaleFor: Long? = null,
+    /** Why the last pass failed, if it did (the report then stays the old one). */
+    val bridgeError: String? = null,
     /** done / total while a bridge pass runs; null otherwise. */
     val bridgeProgress: Pair<Int, Int>? = null,
     /** Twins found after the last pass (Samsung + Google), shown on the main card. */
@@ -182,7 +190,14 @@ class CalendarController(
     val bridge = BridgeEngine(store, prefs)
 
     init {
-        _state.update { it.copy(bridgeLinkedGoogle = bridge.linkedGoogleIds(), bridgeReport = bridge.lastReport) }
+        val last = bridge.lastReport
+        val idle = last?.let { Clock.System.now().toEpochMilliseconds() - it.atMillis }
+        _state.update {
+            it.copy(
+                bridgeLinkedGoogle = bridge.linkedGoogleIds(), bridgeReport = last,
+                bridgeStaleFor = idle?.takeIf { ms -> it.settings.bridgeOn && ms > 30 * 60_000L },
+            )
+        }
         reload()
         scope.launch {
             // A burst of writes (a sync pulling many events) reloads once.
@@ -226,6 +241,7 @@ class CalendarController(
                     bridgeProgress = null,
                     bridgeLinkedGoogle = bridge.linkedGoogleIds(),
                     bridgeReport = r.getOrNull() ?: it.bridgeReport,
+                    bridgeError = r.exceptionOrNull()?.let { e -> e.message ?: e::class.simpleName ?: "알 수 없는 오류" },
                     occurrences = shownOf(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
                 )
             }
@@ -262,6 +278,24 @@ class CalendarController(
 
     /** What vanished on one side and waits for a yes: (title, side it is still on). */
     suspend fun bridgePending(): List<Pair<String, String>> = bridgeConfig()?.let { bridge.pendingDeletes(it) } ?: emptyList()
+
+    /** Titles of the events a pass deleted by itself in the last day (docs/07 §18). */
+    fun bridgeAutoDeleted(): List<String> = if (bridgeConfig() == null) emptyList() else bridge.recentAutoDeleted.map { it.second.title }
+
+    /** Brings the recent automatic deletions back into both calendars. */
+    fun undoBridgeAutoDeleted() {
+        val config = bridgeConfig() ?: return
+        scope.launch {
+            runCatching { bridge.undoAutoDeleted(config) }
+            _state.update { it.copy(bridgeReport = bridge.lastReport, bridgeLinkedGoogle = bridge.linkedGoogleIds()) }
+            store.requestSync()
+            reload()
+        }
+    }
+
+    fun keepBridgeAutoDeleted() = bridge.keepAutoDeleted()
+
+    fun dismissBridgeStale() = _state.update { it.copy(bridgeStaleFor = null) }
 
     /** Keep what vanished on one side: copy it back instead of deleting the partner. */
     fun keepBridgePending() {

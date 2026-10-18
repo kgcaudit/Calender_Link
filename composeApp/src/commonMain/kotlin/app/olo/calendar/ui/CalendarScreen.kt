@@ -309,6 +309,8 @@ fun CalendarScreen(
             onEnableSync = { account -> enableSync(account, state, controller, settings) { syncNote = it } },
             onChanged = { on -> settings?.bridgeChanged(on) },
             onDismiss = { sheet = Sheet.None },
+            batteryUnrestricted = settings?.batteryUnrestricted ?: true,
+            onBattery = { settings?.askBatteryUnrestricted() },
         )
         is Sheet.Move -> MoveSheet(
             from = state.calendarsById[s.fromCalendarId],

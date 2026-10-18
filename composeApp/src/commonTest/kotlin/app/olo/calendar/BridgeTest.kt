@@ -8,6 +8,8 @@ import app.olo.calendar.model.BridgeOp
 import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.model.EventDraft
 import app.olo.calendar.model.MemoryPreferences
+import app.olo.calendar.model.encodeFields
+import app.olo.calendar.model.decodeFields
 import app.olo.calendar.model.MovePlan
 import app.olo.calendar.model.MoveResult
 import app.olo.calendar.model.Occurrence
@@ -65,13 +67,27 @@ class BridgeTest {
     }
 
     @Test
-    fun deletionsAlwaysWaitForAYes() {
+    fun aFewDeletionsGoThroughManyWaitForAYes() {
         val one = item("s1", "치과")
         val link = BridgeLink("s1", "g1", one.fingerprint, one.fingerprint, samsungConfirmed = true, googleConfirmed = true)
-        val p = planBridge(emptyList(), listOf(item("g1", "치과")), listOf(link))
-        assertTrue(p.ops.isEmpty())
-        assertEquals(listOf<BridgeOp>(BridgeOp.DeleteGoogle("g1", "s1")), p.pendingDeletes)
-        assertEquals(listOf<BridgeOp>(BridgeOp.DeleteGoogle("g1", "s1")), planBridge(emptyList(), listOf(item("g1", "치과")), listOf(link), allowMassDelete = true).ops)
+        // One event deleted in Samsung Calendar: the Google copy goes too.
+        assertEquals(listOf<BridgeOp>(BridgeOp.DeleteGoogle("g1", "s1")), planBridge(emptyList(), listOf(item("g1", "치과")), listOf(link)).ops)
+        // With no allowance it waits, as before 0.10.2.
+        val held = planBridge(emptyList(), listOf(item("g1", "치과")), listOf(link), autoDeleteLimit = 0)
+        assertTrue(held.ops.isEmpty())
+        assertEquals(listOf<BridgeOp>(BridgeOp.DeleteGoogle("g1", "s1")), held.pendingDeletes)
+        // Four gone at once (more than AUTO_DELETE_LIMIT) looks like a loss: all wait.
+        val items = (1..4).map { item("s$it", "일정 $it", it * 1000L) }
+        val links = items.map { BridgeLink(it.id, "g" + it.id.drop(1), it.fingerprint, it.fingerprint, true, true) }
+        val many = planBridge(emptyList(), items.map { item("g" + it.id.drop(1), it.fields.title, it.fields.startMillis) }, links)
+        assertTrue(many.ops.none { it is BridgeOp.DeleteGoogle })
+        assertEquals(4, many.pendingDeletes.size)
+    }
+
+    @Test
+    fun fieldsSurviveTheUndoRecord() {
+        val f = item("s1", "가족 저녁\n메모", 5_000).fields.copy(exdates = listOf(1L, 2L), reminderMinutes = listOf(10, 60))
+        assertEquals(f, decodeFields(encodeFields(f)))
     }
 
     @Test
@@ -175,21 +191,40 @@ class BridgeTest {
         store.put("G", gOfS1, f("치과 (변경)"))
         engine.run(cfg)
         assertEquals("치과 (변경)", store.fields("s1").title)
-        // A delete on Samsung waits for a yes; keeping it copies the survivor back.
+        // One event deleted on Samsung carries over by itself, and can be undone for a day.
         store.remove("s2")
         engine.run(cfg)
-        assertEquals(3, store.count("G"))
-        assertEquals(listOf("회의" to "google"), engine.pendingDeletes(cfg))
-        engine.keepPending(cfg)
-        assertEquals(3, store.count("S"))
-        // Deleting for real takes the person's yes.
-        store.remove(engine.links.first { store.fields(it.googleId).title == "회의" }.samsungId)
-        engine.run(cfg, allowMassDelete = true)
         assertEquals(2, store.count("G"))
-        // And what the phone still holds of a deleted event can be brought back.
-        assertTrue(engine.recoverable(cfg).any { it.fields.title == "회의" })
-        assertEquals(1, engine.restore(cfg, connected = true))
+        assertEquals(listOf("회의"), engine.recentAutoDeleted.map { it.second.title })
+        assertEquals(1, engine.undoAutoDeleted(cfg))
         assertEquals(3, store.count("S")); assertEquals(3, store.count("G"))
+        assertTrue(engine.recentAutoDeleted.isEmpty())
+    }
+
+    @Test
+    fun manyDeletionsWaitAndCanBeKeptOrConfirmed() = runTest {
+        val store = FakeBridgeStore()
+        (1..5).forEach { store.put("S", "s$it", f("일정 $it", it * 10_000L)) }
+        val engine = BridgeEngine(store, MemoryPreferences())
+        val cfg = BridgeConfig("S", "G")
+        engine.run(cfg)
+        // Four vanish from Samsung at once: nothing is deleted on Google.
+        (1..4).forEach { store.remove("s$it") }
+        engine.run(cfg)
+        assertEquals(5, store.count("G"))
+        assertEquals(4, engine.pendingDeletes(cfg).size)
+        // Keeping them copies the survivors back.
+        engine.keepPending(cfg)
+        assertEquals(5, store.count("S"))
+        // Deleting for real takes the person's yes.
+        val doomed = engine.links.filter { store.fields(it.samsungId).title in setOf("일정 1", "일정 2", "일정 3", "일정 4") }.map { it.samsungId }
+        doomed.forEach { store.remove(it) }
+        engine.run(cfg, allowMassDelete = true)
+        assertEquals(1, store.count("G"))
+        // And what the phone still holds of a deleted event can be brought back.
+        assertTrue(engine.recoverable(cfg).any { it.fields.title == "일정 1" })
+        assertEquals(4, engine.restore(cfg, connected = true))
+        assertEquals(5, store.count("S")); assertEquals(5, store.count("G"))
     }
 
     @Test
@@ -246,6 +281,9 @@ private class FakeBridgeStore : CalendarStore {
         val cal = rows[targetId]?.first ?: return null
         rows[targetId] = cal to src.second
         return targetId
+    }
+    override suspend fun bridgeCreate(fields: BridgeFields, toCalendarId: String): String {
+        val id = "n${next++}"; rows[id] = toCalendarId to fields; return id
     }
     override suspend fun bridgeDelete(id: String) = rows.remove(id)?.also { gone[id] = it } != null
     val gone = LinkedHashMap<String, Pair<String, BridgeFields>>()
