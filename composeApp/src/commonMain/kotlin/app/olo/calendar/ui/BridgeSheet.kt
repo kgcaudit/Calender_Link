@@ -6,6 +6,8 @@ import app.olo.calendar.design.color
 import app.olo.calendar.design.OloHue
 import app.olo.calendar.model.dayKo
 import app.olo.calendar.model.clockKo
+import app.olo.calendar.model.eventDayKo
+import app.olo.calendar.model.spanKo
 import app.olo.calendar.model.LogDir
 import kotlinx.datetime.toLocalDateTime
 import androidx.compose.foundation.background
@@ -433,7 +435,8 @@ private fun LogCard(controller: CalendarController) {
     )
     if (!open) return
     // Each pass that carried something: when, why, then each event — which way, what, and what changed.
-    quiet?.let {
+    // The last quiet check only matters when it came after the newest entry.
+    quiet?.takeIf { q -> entries.firstOrNull()?.let { q > it.atMillis } ?: true }?.let {
         Text("마지막 확인 ${dayKo(it, zone)} ${clockKo(it, zone)} · 바뀐 일정 없음", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
     }
     entries.take(30).forEach { e ->
@@ -463,7 +466,7 @@ private fun LogCard(controller: CalendarController) {
                             Text(i.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Text(
-                            dayKo(i.startMillis, zone) + " " + if (i.allDay) "종일" else "${clockKo(i.startMillis, zone)}–${clockKo(i.endMillis, zone)}",
+                            eventDayKo(i.startMillis, i.allDay, zone) + " " + spanKo(i.startMillis, i.endMillis, i.allDay, zone),
                             style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                         )
                         if (i.detail.isNotBlank()) Text(i.detail, style = MaterialTheme.typography.labelSmall, color = OloTone.accent)

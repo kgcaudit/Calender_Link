@@ -80,8 +80,16 @@ fun dayKo(millis: Long, zone: TimeZone): String {
     return "${d.monthNumber}월 ${d.dayOfMonth}일 (${d.dayOfWeek.koShort()})"
 }
 
-private fun span(f: BridgeFields, zone: TimeZone): String =
-    if (f.allDay) "종일" else "${clockKo(f.startMillis, zone)}–${clockKo(f.endMillis, zone)}"
+/** The day an event falls on: all-day events are kept at UTC midnight, so read them in UTC. */
+fun eventDayKo(startMillis: Long, allDay: Boolean, zone: TimeZone): String =
+    dayKo(startMillis, if (allDay) TimeZone.UTC else zone)
+
+/** "종일" or "오후 1:30–오후 2:30". */
+fun spanKo(startMillis: Long, endMillis: Long, allDay: Boolean, zone: TimeZone): String =
+    if (allDay) "종일" else "${clockKo(startMillis, zone)}–${clockKo(endMillis, zone)}"
+
+private fun span(f: BridgeFields, zone: TimeZone): String = spanKo(f.startMillis, f.endMillis, f.allDay, zone)
+private fun day(f: BridgeFields, zone: TimeZone): String = eventDayKo(f.startMillis, f.allDay, zone)
 
 /** What an edit changed, from [old] to [new], in a few words a person reads at once. */
 fun describeChange(old: BridgeFields?, new: BridgeFields, zone: TimeZone): String {
@@ -89,9 +97,9 @@ fun describeChange(old: BridgeFields?, new: BridgeFields, zone: TimeZone): Strin
     val parts = buildList {
         if (old.title.trim() != new.title.trim()) add("제목 ${old.title.trim()} → ${new.title.trim()}")
         if (old.startMillis != new.startMillis || old.endMillis != new.endMillis || old.allDay != new.allDay) {
-            val moved = dayKo(old.startMillis, zone) != dayKo(new.startMillis, zone)
+            val moved = day(old, zone) != day(new, zone)
             add(
-                if (moved) "일시 ${dayKo(old.startMillis, zone)} ${span(old, zone)} → ${dayKo(new.startMillis, zone)} ${span(new, zone)}"
+                if (moved) "일시 ${day(old, zone)} ${span(old, zone)} → ${day(new, zone)} ${span(new, zone)}"
                 else "시간 ${span(old, zone)} → ${span(new, zone)}",
             )
         }

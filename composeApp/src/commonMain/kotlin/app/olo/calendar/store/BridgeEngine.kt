@@ -135,9 +135,9 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     /** Brings them back into Samsung Calendar (the home calendar); a pass then copies them to Google. */
     suspend fun restore(config: BridgeConfig, connected: Boolean): Int = lock.withLock {
         val items = recoverable(config)
-        var n = 0
-        items.forEach { if (store.bridgeRestore(it.id, config.samsungCalendarId) != null) n++ }
-        record(LogEntry(Clock.System.now().toEpochMilliseconds(), "되살리기", items.map { LogItem(LogDir.TO_SAMSUNG, "되살림", it.fields, "지워진 기록에서 Samsung으로") }))
+        val back = items.filter { store.bridgeRestore(it.id, config.samsungCalendarId) != null }
+        val n = back.size
+        if (back.isNotEmpty()) record(LogEntry(Clock.System.now().toEpochMilliseconds(), "되살리기", back.map { LogItem(LogDir.TO_SAMSUNG, "되살림", it.fields, "지워진 기록에서 Samsung으로") }))
         if (connected) runLocked(config, allowMassDelete = false, { _, _ -> }, "되살린 뒤 맞춤")
         n
     }
@@ -178,13 +178,13 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val items = recentAutoDeleted
         val live = (store.bridgeItems(config.samsungCalendarId) + store.bridgeItems(config.googleCalendarId))
             .map { it.twinKey }.toMutableSet()
-        var n = 0
-        items.forEach { (_, f) ->
+        val back = items.map { it.second }.filter { f ->
             val key = BridgeItem("", f).twinKey
-            if (key !in live && store.bridgeCreate(f, config.samsungCalendarId) != null) { n++; live += key }
+            (key !in live && store.bridgeCreate(f, config.samsungCalendarId) != null).also { if (it) live += key }
         }
+        val n = back.size
         prefs.put(KEY_AUTO_DELETED, null)
-        record(LogEntry(Clock.System.now().toEpochMilliseconds(), "되돌리기", items.map { LogItem(LogDir.TO_SAMSUNG, "되살림", it.second, "함께 지운 일정을 Samsung으로") }))
+        if (back.isNotEmpty()) record(LogEntry(Clock.System.now().toEpochMilliseconds(), "되돌리기", back.map { LogItem(LogDir.TO_SAMSUNG, "되살림", it, "함께 지운 일정을 Samsung으로") }))
         runLocked(config, allowMassDelete = false, { _, _ -> }, "되돌린 뒤 맞춤")
         n
     }
@@ -192,8 +192,15 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     /** Lets the recent automatic deletions stand: the undo line goes away. */
     fun keepAutoDeleted() = prefs.put(KEY_AUTO_DELETED, null)
 
-    /** The last passes, newest first, for the bridge sheet's record. */
-    val log: List<String> get() = prefs.get(KEY_LOG).orEmpty().split('\n').filter { it.isNotBlank() }
+    /**
+     * Lines from before 0.10.8 (counts only), newest first. Nothing writes them any
+     * more, so they age out by time: after [LEGACY_DAYS] days they are no longer shown.
+     */
+    val log: List<String>
+        get() {
+            val since = Clock.System.now().toEpochMilliseconds() - LEGACY_DAYS * 86_400_000L
+            return prefs.get(KEY_LOG).orEmpty().split('\n').filter { it.isNotBlank() && (it.substringBefore('|').toLongOrNull() ?: 0L) >= since }
+        }
 
     /**
      * The record (docs/07 §19), newest first: only passes that carried something,
@@ -256,16 +263,9 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val sPrint = samsung.associate { it.id to it.fingerprint }
         val gPrint = google.associate { it.id to it.fingerprint }
         val touched = HashSet<String>()
-        val deletedTitles = mutableListOf<String>()
+        // For the record: each event carried, which way, and what changed.
         val items = mutableListOf<LogItem>()
         val zone = kotlinx.datetime.TimeZone.currentSystemDefault()
-        // Which edits went which way, for the record: shows at once if an edit was carried back.
-        val toGoogleTitles = mutableListOf<String>()
-        val toSamsungTitles = mutableListOf<String>()
-        val sTitle = samsung.associate { it.id to it.fields.title }
-        val gTitle = google.associate { it.id to it.fields.title }
-        fun sPrintTitle(id: String) = sTitle[id].orEmpty()
-        fun gPrintTitle(id: String) = gTitle[id].orEmpty()
         var sinceSave = 0
         fun pair(sid: String, gid: String) {
             val p = sPrint[sid] ?: gPrint[gid] ?: ""
@@ -282,25 +282,24 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
                         .also { if (it) sById[op.samsungId]?.let { s -> items += LogItem(LogDir.TO_GOOGLE, "새 일정", s.fields) } }
                     is BridgeOp.CreateInSamsung -> (store.bridgeCopy(op.googleId, config.samsungCalendarId)?.also { pair(it, op.googleId) } != null)
                         .also { if (it) gById[op.googleId]?.let { g -> items += LogItem(LogDir.TO_SAMSUNG, "새 일정", g.fields) } }
-                    is BridgeOp.UpdateGoogle -> (store.bridgeReplace(op.samsungId, op.googleId)?.also { pair(op.samsungId, it); toGoogleTitles += sPrintTitle(op.samsungId) } != null)
+                    is BridgeOp.UpdateGoogle -> (store.bridgeReplace(op.samsungId, op.googleId)?.also { pair(op.samsungId, it) } != null)
                         .also { if (it) sById[op.samsungId]?.let { s -> items += LogItem(LogDir.TO_GOOGLE, "수정", s.fields, describeChange(gById[op.googleId]?.fields, s.fields, zone)) } }
                     is BridgeOp.UpdateSamsung -> (store.bridgeReplace(op.googleId, op.samsungId)?.also { newS ->
                         if (newS != op.samsungId) pairs.remove(op.samsungId)
                         pair(newS, op.googleId)
-                        toSamsungTitles += gPrintTitle(op.googleId)
                     } != null).also { if (it) gById[op.googleId]?.let { g -> items += LogItem(LogDir.TO_SAMSUNG, "수정", g.fields, describeChange(sById[op.samsungId]?.fields, g.fields, zone)) } }
                     is BridgeOp.DeleteGoogle -> {
                         // Keep what is about to go, so a deletion carried over by itself can be undone.
                         if (!allowMassDelete) gById[op.googleId]?.let { keepForUndo(it.fields, googleSide = true) }
                         store.bridgeDelete(op.googleId).also { if (it) {
-                            pairs.remove(op.samsungId); deleted++; deletedTitles += gPrintTitle(op.googleId); oloDeleted = oloDeleted + op.googleId
+                            pairs.remove(op.samsungId); deleted++; oloDeleted = oloDeleted + op.googleId
                             gById[op.googleId]?.let { g -> items += LogItem(LogDir.TO_GOOGLE, "삭제", g.fields, "Samsung에서 사라짐") }
                         } }
                     }
                     is BridgeOp.DeleteSamsung -> {
                         if (!allowMassDelete) sById[op.samsungId]?.let { keepForUndo(it.fields, googleSide = false) }
                         store.bridgeDelete(op.samsungId).also { if (it) {
-                            pairs.remove(op.samsungId); deleted++; deletedTitles += sPrintTitle(op.samsungId); oloDeleted = oloDeleted + op.samsungId
+                            pairs.remove(op.samsungId); deleted++; oloDeleted = oloDeleted + op.samsungId
                             sById[op.samsungId]?.let { s -> items += LogItem(LogDir.TO_SAMSUNG, "삭제", s.fields, "구글에서 사라짐") }
                         } }
                     }
@@ -351,8 +350,12 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
             plan.conflicts.takeIf { it > 0 }?.let { "양쪽 수정 ${it}건 · Samsung 기준" },
             plan.orphans.size.takeIf { it > 0 }?.let { "동기화 전 사라짐 ${it}개" },
             plan.unsupported.takeIf { it > 0 }?.let { "구글이 받지 않는 일정 ${it}개" },
+            (failed - items.count { it.op == "실패" }).takeIf { it > 0 }?.let { "쓰기 실패 ${it}건" },
         ).joinToString(" · ")
-        if (items.isEmpty() && note.isEmpty()) prefs.put(KEY_LAST_CHECK, report.atMillis.toString())
+        // Held deletes and events Google cannot hold stay the same pass after pass: the same
+        // note again with nothing carried is a quiet pass, not a new entry.
+        val quiet = items.isEmpty() && failed == 0 && (note.isEmpty() || note == entries.firstOrNull()?.note)
+        if (quiet) prefs.put(KEY_LAST_CHECK, report.atMillis.toString())
         else record(LogEntry(report.atMillis, trigger, items, note))
         return report
     }
@@ -412,5 +415,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         const val RS = "\u001C"
         /** How long an automatic deletion can be undone. */
         const val UNDO_HOURS = 24L
+        /** How long the counts-only lines from before 0.10.8 stay on the sheet. */
+        const val LEGACY_DAYS = 7L
     }
 }
