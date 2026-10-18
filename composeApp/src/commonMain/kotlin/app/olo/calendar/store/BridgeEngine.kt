@@ -210,6 +210,9 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val gPrint = google.associate { it.id to it.fingerprint }
         val touched = HashSet<String>()
         val deletedTitles = mutableListOf<String>()
+        // Which edits went which way, for the record: shows at once if an edit was carried back.
+        val toGoogleTitles = mutableListOf<String>()
+        val toSamsungTitles = mutableListOf<String>()
         val sTitle = samsung.associate { it.id to it.fields.title }
         val gTitle = google.associate { it.id to it.fields.title }
         fun sPrintTitle(id: String) = sTitle[id].orEmpty()
@@ -228,10 +231,11 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
                     is BridgeOp.Agree -> { pair(op.samsungId, op.googleId); true }
                     is BridgeOp.CreateInGoogle -> store.bridgeCopy(op.samsungId, config.googleCalendarId)?.also { pair(op.samsungId, it) } != null
                     is BridgeOp.CreateInSamsung -> store.bridgeCopy(op.googleId, config.samsungCalendarId)?.also { pair(it, op.googleId) } != null
-                    is BridgeOp.UpdateGoogle -> store.bridgeReplace(op.samsungId, op.googleId)?.also { pair(op.samsungId, it) } != null
+                    is BridgeOp.UpdateGoogle -> store.bridgeReplace(op.samsungId, op.googleId)?.also { pair(op.samsungId, it); toGoogleTitles += sPrintTitle(op.samsungId) } != null
                     is BridgeOp.UpdateSamsung -> store.bridgeReplace(op.googleId, op.samsungId)?.also { newS ->
                         if (newS != op.samsungId) pairs.remove(op.samsungId)
                         pair(newS, op.googleId)
+                        toSamsungTitles += gPrintTitle(op.googleId)
                     } != null
                     is BridgeOp.DeleteGoogle -> {
                         // Keep what is about to go, so a deletion carried over by itself can be undone.
@@ -274,6 +278,8 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         appendLog(
             "${report.atMillis}|구글로 ${plan.toGoogle} · 삼성으로 ${plan.toSamsung} · 삭제 $deleted · 삭제 대기 ${plan.pendingDeletes.size}" +
                 " · 동기화 전 사라짐 ${plan.orphans.size} · 구글 불가 ${plan.unsupported} · 실패 $failed" +
+                (if (toGoogleTitles.isNotEmpty()) " | 구글로 고침: " + toGoogleTitles.take(8).joinToString(", ") else "") +
+                (if (toSamsungTitles.isNotEmpty()) " | 삼성으로 고침: " + toSamsungTitles.take(8).joinToString(", ") else "") +
                 (if (deletedTitles.isNotEmpty()) " | 지움: " + deletedTitles.take(12).joinToString(", ") else ""),
         )
         return report

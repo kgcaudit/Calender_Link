@@ -233,7 +233,13 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             val changed = ContentValues()
             wanted.forEach { (k, v) -> if (!sameValue(current[k], v)) changed.putAny(k, v) }
             if (changed.size() > 0) {
-                resolver.update(ContentUris.withAppendedId(Events.CONTENT_URI, id), changed, null, null)
+                val n = resolver.update(ContentUris.withAppendedId(Events.CONTENT_URI, id), changed, null, null)
+                if (n == 0) error("휴대폰 캘린더가 수정을 받지 않았습니다")
+                // Read back: a provider can accept the call yet keep its own values (0.10.3).
+                val after = readRow(id)
+                val kept = listOf(Events.TITLE, Events.DTSTART, Events.DTEND, Events.EVENT_LOCATION)
+                    .filter { k -> changed.containsKey(k) && !sameValue(after?.get(k), wanted[k]) }
+                if (kept.isNotEmpty()) error("휴대폰 캘린더가 일부 항목을 바꾸지 않았습니다: " + kept.joinToString(", ") { it.lowercase() })
             }
             if (reminders(id).sorted() != draft.reminderMinutes.sorted()) writeReminders(id, draft.reminderMinutes)
             id.toString()
@@ -686,10 +692,14 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
                 put(Events.DESCRIPTION, src[Events.DESCRIPTION] as String?)
                 put(Events.DTSTART, src[Events.DTSTART] as Long?)
                 put(Events.DTEND, endOf(src))
+                // A plain event's length is DTEND alone: a leftover DURATION (Samsung writes
+                // one) would make a provider keep the old length (0.10.3).
+                putNull(Events.DURATION)
                 put(Events.ALL_DAY, if (allDay) 1 else 0)
                 put(Events.EVENT_TIMEZONE, if (allDay) "UTC" else (src[Events.EVENT_TIMEZONE] as String?) ?: zone.id)
             }
-            resolver.update(ContentUris.withAppendedId(Events.CONTENT_URI, targetId.toLong()), v, null, null)
+            // A refused update is a failed write (the pass retries it), not a silent success.
+            if (runCatching { resolver.update(ContentUris.withAppendedId(Events.CONTENT_URI, targetId.toLong()), v, null, null) }.getOrDefault(0) == 0) return@io null
             resolver.delete(Reminders.CONTENT_URI, "${Reminders.EVENT_ID} = ?", arrayOf(targetId))
             copyReminders(sourceId.toLong(), targetId.toLong())
             targetId
