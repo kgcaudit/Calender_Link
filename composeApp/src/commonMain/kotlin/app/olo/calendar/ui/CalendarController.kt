@@ -226,15 +226,15 @@ class CalendarController(
     }
 
     /** One pass now. [allowMassDelete] releases deletions held by the safety stop. */
-    fun runBridge(allowMassDelete: Boolean = false, done: (Result<BridgeReport>) -> Unit = {}) {
+    fun runBridge(allowMassDelete: Boolean = false, retryRefused: Boolean = false, done: (Result<BridgeReport>) -> Unit = {}) {
         val config = bridgeConfig() ?: return
-        scope.launch { done(bridgePass(config, allowMassDelete)) }
+        scope.launch { done(bridgePass(config, allowMassDelete, retryRefused)) }
     }
 
-    private suspend fun bridgePass(config: BridgeConfig, allowMassDelete: Boolean): Result<BridgeReport> {
+    private suspend fun bridgePass(config: BridgeConfig, allowMassDelete: Boolean, retryRefused: Boolean = false): Result<BridgeReport> {
         run {
             val r = runCatching {
-                bridge.run(config, allowMassDelete) { d, t -> if (t > 0) _state.update { it.copy(bridgeProgress = d to t) } }
+                bridge.run(config, allowMassDelete, retryRefused) { d, t -> if (t > 0) _state.update { it.copy(bridgeProgress = d to t) } }
             }
             _state.update {
                 it.copy(
@@ -280,7 +280,7 @@ class CalendarController(
     suspend fun bridgePending(): List<Pair<String, String>> = bridgeConfig()?.let { bridge.pendingDeletes(it) } ?: emptyList()
 
     /** Titles of the events a pass deleted by itself in the last day (docs/07 §18). */
-    fun bridgeAutoDeleted(): List<String> = if (bridgeConfig() == null) emptyList() else bridge.recentAutoDeleted.map { it.second.title }
+    fun bridgeAutoDeleted(): List<app.olo.calendar.store.AutoDeleted> = if (bridgeConfig() == null) emptyList() else bridge.recentAutoDeletedDetail
 
     /** Brings the recent automatic deletions back into both calendars. */
     fun undoBridgeAutoDeleted() {
@@ -522,6 +522,12 @@ class CalendarController(
     fun save(draft: EventDraft, done: (Result<String>) -> Unit = {}) {
         scope.launch {
             val r = runCatching { store.save(draft) }
+            // Saved as a new event in Samsung Calendar (the provider kept the old one's length):
+            // the bridge pair moves with it, so Google gets an edit, not a delete and a copy.
+            val newId = r.getOrNull()
+            if (newId != null && draft.id != null && newId != draft.id && draft.calendarId == _state.value.settings.bridgeSamsungId) {
+                runCatching { bridge.relink(draft.id, newId) }
+            }
             r.onFailure { e -> _state.update { it.copy(error = "저장하지 못했습니다: ${e.message}") } }
             done(r)
             reload()

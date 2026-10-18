@@ -43,6 +43,13 @@ data class BridgeReport(
 }
 
 /**
+ * An event a pass deleted by itself: when, on which side ([googleSide]: the
+ * Google main copy, because the Samsung one vanished; else the reverse), and
+ * what it was, so the sheet can say exactly what happened.
+ */
+data class AutoDeleted(val atMillis: Long, val googleSide: Boolean, val fields: BridgeFields)
+
+/**
  * Runs the bridge: reads both calendars, plans (model/Bridge.kt), writes, and
  * records each pair with the fingerprints both sides now have. One pass at a
  * time per process; the platform (WorkManager on Android) decides when passes
@@ -134,17 +141,25 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
      * other side, a few at a time) in the last [UNDO_HOURS] hours, newest first,
      * with when. Kept as fields, so undo works after the phone purges the row.
      */
-    val recentAutoDeleted: List<Pair<Long, BridgeFields>>
+    val recentAutoDeleted: List<Pair<Long, BridgeFields>> get() = recentAutoDeletedDetail.map { it.atMillis to it.fields }
+
+    /** The same, with which side lost its copy (docs/07 §18: for the sheet's detail list). */
+    val recentAutoDeletedDetail: List<AutoDeleted>
         get() {
             val since = Clock.System.now().toEpochMilliseconds() - UNDO_HOURS * 3_600_000L
             return prefs.get(KEY_AUTO_DELETED).orEmpty().split(RS).mapNotNull { line ->
                 val at = line.substringBefore('|').toLongOrNull() ?: return@mapNotNull null
-                if (at < since) null else decodeFields(line.substringAfter('|'))?.let { at to it }
+                if (at < since) return@mapNotNull null
+                var rest = line.substringAfter('|')
+                // 0.10.7 records the side ("G|" / "S|"); earlier lines have none.
+                val side = rest.substringBefore('|').takeIf { it == "G" || it == "S" }
+                if (side != null) rest = rest.substringAfter('|')
+                decodeFields(rest)?.let { AutoDeleted(at, googleSide = side != "S", fields = it) }
             }
         }
 
-    private fun keepForUndo(f: BridgeFields) {
-        val line = "${Clock.System.now().toEpochMilliseconds()}|${encodeFields(f)}"
+    private fun keepForUndo(f: BridgeFields, googleSide: Boolean) {
+        val line = "${Clock.System.now().toEpochMilliseconds()}|${if (googleSide) "G" else "S"}|${encodeFields(f)}"
         val kept = listOf(line) + prefs.get(KEY_AUTO_DELETED).orEmpty().split(RS).filter { it.isNotBlank() }
         prefs.put(KEY_AUTO_DELETED, kept.take(50).joinToString(RS))
     }
@@ -181,8 +196,23 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     suspend fun run(
         config: BridgeConfig,
         allowMassDelete: Boolean = false,
+        /** A person asked ("지금 맞추기"): offer again what Google refused before. */
+        retryRefused: Boolean = false,
         onProgress: (Int, Int) -> Unit = { _, _ -> },
-    ): BridgeReport = lock.withLock { runLocked(config, allowMassDelete, onProgress) }
+    ): BridgeReport = lock.withLock {
+        if (retryRefused) refused = emptyMap()
+        runLocked(config, allowMassDelete, onProgress)
+    }
+
+    /**
+     * OLO made a Samsung event again under a new id (an edit the provider would not
+     * take, 0.10.5): it is the same event, so its pair follows it. The next pass then
+     * sees an edit and updates the Google copy in place — no delete and re-create, and
+     * the iPhone keeps the same event (0.10.6).
+     */
+    suspend fun relink(oldSamsungId: String, newSamsungId: String) = lock.withLock {
+        links = links.map { if (it.samsungId == oldSamsungId) it.copy(samsungId = newSamsungId, samsungConfirmed = false) else it }
+    }
 
     private suspend fun runLocked(config: BridgeConfig, allowMassDelete: Boolean, onProgress: (Int, Int) -> Unit): BridgeReport {
         val samsung = store.bridgeItems(config.samsungCalendarId)
@@ -239,11 +269,11 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
                     } != null
                     is BridgeOp.DeleteGoogle -> {
                         // Keep what is about to go, so a deletion carried over by itself can be undone.
-                        if (!allowMassDelete) gById[op.googleId]?.let { keepForUndo(it.fields) }
+                        if (!allowMassDelete) gById[op.googleId]?.let { keepForUndo(it.fields, googleSide = true) }
                         store.bridgeDelete(op.googleId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += gPrintTitle(op.googleId); oloDeleted = oloDeleted + op.googleId } }
                     }
                     is BridgeOp.DeleteSamsung -> {
-                        if (!allowMassDelete) sById[op.samsungId]?.let { keepForUndo(it.fields) }
+                        if (!allowMassDelete) sById[op.samsungId]?.let { keepForUndo(it.fields, googleSide = false) }
                         store.bridgeDelete(op.samsungId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += sPrintTitle(op.samsungId); oloDeleted = oloDeleted + op.samsungId } }
                     }
                 }

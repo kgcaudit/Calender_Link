@@ -196,6 +196,8 @@ class BridgeTest {
         engine.run(cfg)
         assertEquals(2, store.count("G"))
         assertEquals(listOf("회의"), engine.recentAutoDeleted.map { it.second.title })
+        // The record says which side lost its copy: Google, because Samsung's vanished.
+        assertTrue(engine.recentAutoDeletedDetail.single().googleSide)
         assertEquals(1, engine.undoAutoDeleted(cfg))
         assertEquals(3, store.count("S")); assertEquals(3, store.count("G"))
         assertTrue(engine.recentAutoDeleted.isEmpty())
@@ -256,6 +258,26 @@ class BridgeTest {
         testScheduler.runCurrent()
         assertEquals(setOf("com.google/hazakuqa@gmail.com"), store.lastExclude)
         assertEquals(false, controller.state.value.syncRun?.running)
+    }
+
+    @Test
+    fun anEventMadeAgainKeepsItsGoogleCopy() = runTest {
+        val store = FakeBridgeStore()
+        store.put("S", "s1", f("기전팀 보고", 10_000))
+        val engine = BridgeEngine(store, MemoryPreferences())
+        val cfg = BridgeConfig("S", "G")
+        engine.run(cfg)
+        val g = engine.links.single().googleId
+        // OLO saves the edit as a new Samsung event (the provider kept the old length).
+        store.remove("s1")
+        store.put("S", "s9", f("기전팀 보고", 10_000).copy(endMillis = 10_000 + 3_600_000))
+        engine.relink("s1", "s9")
+        engine.run(cfg)
+        // The same Google event, edited: nothing deleted, nothing copied.
+        assertEquals(1, store.count("G"))
+        assertEquals(g, engine.links.single().googleId)
+        assertEquals(10_000L + 3_600_000, store.fields(g).endMillis)
+        assertTrue(engine.recentAutoDeleted.isEmpty())
     }
 }
 

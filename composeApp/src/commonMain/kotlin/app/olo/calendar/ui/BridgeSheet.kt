@@ -1,5 +1,7 @@
 package app.olo.calendar.ui
 
+import app.olo.calendar.model.koShort
+import kotlinx.datetime.toLocalDateTime
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +41,21 @@ import app.olo.calendar.store.BridgeReport
 import kotlinx.datetime.Clock
 
 /** "방금", "3분 전", "2시간 전", "어제". */
+/** "10월 19일 (월) 오후 1:30 – 오후 2:30", or the dates of an all-day event. */
+internal fun eventWhenKo(f: app.olo.calendar.model.BridgeFields, zone: kotlinx.datetime.TimeZone): String {
+    fun day(d: kotlinx.datetime.LocalDate) = "${d.monthNumber}월 ${d.dayOfMonth}일 (${d.dayOfWeek.koShort()})"
+    fun time(t: kotlinx.datetime.LocalTime) = (if (t.hour < 12) "오전 " else "오후 ") + "${(t.hour + 11) % 12 + 1}:${t.minute.toString().padStart(2, '0')}"
+    return if (f.allDay) {
+        val a = app.olo.calendar.model.AllDay.firstDay(f.startMillis)
+        val b = app.olo.calendar.model.AllDay.lastDay(f.startMillis, f.endMillis)
+        if (a == b) "${day(a)} 종일" else "${day(a)} – ${day(b)} 종일"
+    } else {
+        val s = kotlinx.datetime.Instant.fromEpochMilliseconds(f.startMillis).toLocalDateTime(zone)
+        val e = kotlinx.datetime.Instant.fromEpochMilliseconds(f.endMillis).toLocalDateTime(zone)
+        "${day(s.date)} ${time(s.time)} – " + (if (e.date != s.date) day(e.date) + " " else "") + time(e.time)
+    }
+}
+
 internal fun agoKo(atMillis: Long): String {
     val m = (Clock.System.now().toEpochMilliseconds() - atMillis) / 60_000
     return when {
@@ -276,22 +293,49 @@ private fun Connected(
         if (parts.isNotEmpty()) Text("지난번: " + parts.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     // A few deletions carry over by themselves (0.10.2); for a day they can be undone here.
-    var autoDeleted by remember { mutableStateOf<List<String>>(emptyList()) }
+    var autoDeleted by remember { mutableStateOf<List<app.olo.calendar.store.AutoDeleted>>(emptyList()) }
+    var detail by remember { mutableStateOf(false) }
     LaunchedEffect(r?.atMillis, state.bridgeProgress == null) {
         if (state.bridgeProgress == null) autoDeleted = controller.bridgeAutoDeleted()
     }
     if (autoDeleted.isNotEmpty()) {
-        Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.small) {
+        val cs = MaterialTheme.colorScheme
+        Surface(color = cs.surfaceContainerHigh, shape = MaterialTheme.shapes.small) {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("함께 지운 일정 ${autoDeleted.size}개", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    autoDeleted.take(6).joinToString(", ") + if (autoDeleted.size > 6) " 외 ${autoDeleted.size - 6}개" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text("한쪽에서 지운 일정을 다른 쪽에서도 지웠습니다. 24시간 동안 되돌릴 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("한쪽에서 지운 일정을 다른 쪽에서도 지웠습니다. 24시간 동안 되돌릴 수 있습니다.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                // Each one: what it was, which side lost it and why, and when (for tracing what happened).
+                autoDeleted.forEach { a ->
+                    val f = a.fields
+                    Column(
+                        Modifier.fillMaxWidth().padding(top = 6.dp)
+                            .background(cs.surfaceContainerLowest, MaterialTheme.shapes.small).padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(f.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Text(eventWhenKo(f, controller.zone), style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (a.googleSide) "Samsung Calendar에서 사라져 → 구글 메인(${state.bridgeGoogle?.accountName ?: "Google"})에서 지움"
+                            else "구글 메인에서 사라져 → Samsung Calendar에서 지움",
+                            style = MaterialTheme.typography.bodySmall, color = OloTone.accent,
+                        )
+                        if (detail) {
+                            listOfNotNull(
+                                f.location.takeIf { it.isNotBlank() }?.let { "장소 · $it" },
+                                f.rrule.takeIf { it.isNotBlank() }?.let { "반복 · $it" },
+                                f.reminderMinutes.takeIf { it.isNotEmpty() }?.let { m -> "알림 · " + m.sorted().joinToString(", ") { "${it}분 전" } },
+                                f.description.takeIf { it.isNotBlank() }?.let { "메모 · " + it.take(80) },
+                                "지운 시각 · ${agoKo(a.atMillis)}",
+                            ).forEach { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) }
+                        } else {
+                            Text("지운 시각 · ${agoKo(a.atMillis)}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                        }
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OloTextButton("되돌리기", { controller.undoBridgeAutoDeleted(); autoDeleted = emptyList() }, enabled = state.bridgeProgress == null)
                     OloTextButton("확인", { controller.keepBridgeAutoDeleted(); autoDeleted = emptyList() })
+                    OloTextButton(if (detail) "간단히" else "자세히", { detail = !detail })
                 }
             }
         }
@@ -335,7 +379,7 @@ private fun Connected(
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
         OloTextButton("연결 해제", { controller.stopBridge(); onChanged(false); onDismiss() })
         Spacer(Modifier.weight(1f))
-        OloOutlinedButton("지금 맞추기", { controller.runBridge() }, enabled = state.bridgeProgress == null)
+        OloOutlinedButton("지금 맞추기", { controller.runBridge(retryRefused = true) }, enabled = state.bridgeProgress == null)
         OloButton("닫기", onDismiss)
     }
 }
