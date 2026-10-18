@@ -192,6 +192,18 @@ class CalendarGroupsTest {
     }
 
     @Test
+    fun syncCountsFollowExclusionsLive() {
+        // hazakuqa and kgcaudit02 need access; excluding hazakuqa drops it from the warning and counts it as excluded.
+        val st = app.olo.calendar.model.AppSettings(syncExcluded = setOf("com.google/hazakuqa@gmail.com"))
+        assertEquals(2, ui().syncUnreachable)
+        assertEquals(1, ui(st).syncUnreachable)
+        assertEquals(1, ui(st).syncExcludedCount)
+        // The Samsung account sharing sutest's name is a different key: excluding Google sutest leaves it asked.
+        val main = app.olo.calendar.model.AppSettings(syncExcluded = setOf("com.google/sutest@gmail.com"))
+        assertEquals(1, ui(main).syncExcludedCount)
+    }
+
+    @Test
     fun chosenDefaultWins() {
         val st = app.olo.calendar.model.AppSettings(bridgeSamsungId = "16", bridgeGoogleId = "6", defaultCalendarId = "7")
         assertEquals("7", ui(st).defaultCalendar?.id)

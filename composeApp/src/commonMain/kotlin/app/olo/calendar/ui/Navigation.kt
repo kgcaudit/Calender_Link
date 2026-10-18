@@ -155,7 +155,7 @@ fun DrawerContent(nav: NavActions) {
                 Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(top = 6.dp, bottom = 12.dp)) {
                     CalendarTree(nav)
                     Divider()
-                    SyncNowRow(nav.state.syncRun, nav.onSyncNow)
+                    SyncNowRow(nav.state, nav.onSyncNow)
                     DrawerRow(OloIcons.Settings, "설정", onClick = nav.onSettings)
                 }
                 NoteBar(nav, Modifier.align(Alignment.BottomCenter))
@@ -450,6 +450,8 @@ private fun MainSection(samsung: CalendarInfo, google: CalendarInfo, rest: List<
                             s.bridgeProgress != null -> "맞추는 중" to green
                             s.bridgeDuplicates > 0 -> "중복 ${s.bridgeDuplicates}개" to cs.error
                             issue -> "확인 필요" to cs.error
+                            // The same account the Google group's card excludes: shown here too.
+                            google.syncKey in s.settings.syncExcluded -> "연결됨 · 구글 메인 지금 동기화 제외" to cs.error
                             else -> "연결됨" to green
                         }
                         Box(Modifier.size(6.dp).background(color, CircleShape))
@@ -575,7 +577,13 @@ private fun AccountCard(account: AccountGroup, nav: NavActions, shown: (String) 
                         Text(account.title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             SyncChip(account, nav)
-                            Text("${account.subtitle} · ${account.calendars.size}개", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1)
+                            // The Google main account's pair and 가족 sit in 연동 캘린더: this card holds the rest.
+                            val first = account.calendars.first()
+                            val isMain = nav.state.bridgeGoogle?.let { it.accountName == first.accountName && it.accountType == first.accountType } == true
+                            Text(
+                                if (isMain) "구글 메인 · 연동 외 ${account.calendars.size}개" else "${account.subtitle} · ${account.calendars.size}개",
+                                style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1,
+                            )
                         }
                     }
                     TriStateCheckbox(state = tri.toggleable(), onClick = { nav.onShown(ids, tri != TriState.ALL) })
@@ -640,7 +648,7 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
                         text = {
                             Column {
                                 Text("휴대폰 동기화 끄기")
-                                Text("Samsung·Google 캘린더 앱에도 적용", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                                Text("계정 전체 · Samsung·Google 캘린더 앱에도 적용", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                             }
                         },
                         leadingIcon = { Icon(OloIcons.Warning, contentDescription = null) },
@@ -737,10 +745,12 @@ private fun ExcludeItem(account: AccountGroup, nav: NavActions, excluded: Boolea
         text = {
             Column {
                 Text(if (excluded) "지금 동기화에 다시 포함" else "지금 동기화에서 제외", color = if (excluded) cs.primary else Color.Unspecified, fontWeight = if (excluded) FontWeight.SemiBold else null)
+                // Sync runs per account (Android has no per-calendar manual sync): say so.
+                val all = nav.state.calendars.count { it.syncKey == first.syncKey }
                 val note = when {
                     excluded -> null
-                    isMain -> "구글 메인 계정: 아이폰 반영이 늦어질 수 있음"
-                    else -> "OLO만 · 휴대폰 자동 동기화는 그대로"
+                    isMain -> "계정 전체 ${all}개 캘린더 · 연동 캘린더 포함 · 아이폰 반영이 늦어질 수 있음"
+                    else -> "계정 전체 ${all}개 캘린더 · OLO만, 휴대폰 자동 동기화는 그대로"
                 }
                 if (note != null) Text(note, style = MaterialTheme.typography.labelSmall, color = if (isMain) cs.error else cs.onSurfaceVariant)
             }
@@ -873,8 +883,9 @@ private fun DrawerRow(icon: ImageVector, text: String, onClick: () -> Unit) {
  * matched, and whether some accounts may have been skipped.
  */
 @Composable
-private fun SyncNowRow(run: SyncRun?, onClick: () -> Unit) {
+private fun SyncNowRow(state: CalendarUiState, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    val run = state.syncRun
     val running = run?.running == true
     val spin = androidx.compose.animation.core.rememberInfiniteTransition()
     val angle by spin.animateFloat(
@@ -906,13 +917,16 @@ private fun SyncNowRow(run: SyncRun?, onClick: () -> Unit) {
                         else -> "바뀐 일정 없음"
                     },
                     run.matched?.takeIf { it > 0 }?.let { "맞춤 ${it}개" },
-                    run.excluded.takeIf { it > 0 }?.let { "${it}개 계정 제외" },
                 ).joinToString(" · ")
             }
-            if (line != null) Text(line, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-            if (run != null && !running && run.unreachable > 0) {
+            // Counts read live: excluding an account after the run updates the line at once.
+            val excluded = state.syncExcludedCount
+            val unreachable = state.syncUnreachable
+            val full = listOfNotNull(line, excluded.takeIf { it > 0 && !running }?.let { "${it}개 계정 제외" }).joinToString(" · ").ifEmpty { null }
+            if (full != null) Text(full, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            if (run != null && !running && unreachable > 0) {
                 Text(
-                    "${run.unreachable}개 계정은 확인 필요 · 계정의 ‘확인 필요’를 눌러 허용하세요",
+                    "${unreachable}개 계정은 확인 필요 · 계정의 ‘확인 필요’를 눌러 허용하세요",
                     style = MaterialTheme.typography.labelSmall, color = cs.error,
                 )
             }

@@ -107,6 +107,16 @@ data class CalendarUiState(
             stranded.forEach { (c, n) -> add(SyncAction.Stranded(c, n)) }
         }
 
+    /**
+     * Accounts left out of "지금 동기화" right now (docs/07 §17), read live so the
+     * drawer line follows a change made after the last run.
+     */
+    val syncExcludedCount: Int get() = syncAccounts(calendars).count { it.syncKey in settings.syncExcluded }
+
+    /** "확인 필요" accounts still asked (excluded ones are left alone on purpose). */
+    val syncUnreachable: Int
+        get() = syncAccounts(calendars).count { it.accountName in sync.accountsNeedingAccess && it.syncKey !in settings.syncExcluded }
+
     val needsSyncAttention: Boolean get() = syncActions.isNotEmpty() || (bridgeReport?.heldDeletes ?: 0) > 0 || bridgeDuplicates > 0
 
     fun isShown(c: CalendarInfo): Boolean = settings.isShown(c)
@@ -535,11 +545,6 @@ class CalendarController(
                         running = false, atMillis = Clock.System.now().toEpochMilliseconds(),
                         added = maxOf(0, after - before), removed = maxOf(0, before - after),
                         matched = bridged?.let { b -> b.toGoogle + b.toSamsung },
-                        // Excluded accounts are left alone on purpose: not counted as unreachable.
-                        unreachable = s.sync.accountsNeedingAccess.count { name ->
-                            s.calendars.none { it.accountName == name && it.syncKey in s.settings.syncExcluded }
-                        },
-                        excluded = syncAccounts(s.calendars).count { it.syncKey in s.settings.syncExcluded },
                     ),
                 )
             }
@@ -579,10 +584,6 @@ data class SyncRun(
     val removed: Int = 0,
     /** Events the bridge copied between Samsung Calendar and the Google main calendar; null when not linked. */
     val matched: Int? = null,
-    /** Accounts the phone may have skipped because OLO has not been allowed to see them. */
-    val unreachable: Int = 0,
-    /** Accounts the person left out of "지금 동기화". */
-    val excluded: Int = 0,
 )
 
 /** One reason events might not reach the other phone. */
