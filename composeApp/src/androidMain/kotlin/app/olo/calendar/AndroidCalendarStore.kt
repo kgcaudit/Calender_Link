@@ -242,7 +242,20 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
                 if (kept.isNotEmpty()) error("휴대폰 캘린더가 일부 항목을 바꾸지 않았습니다: " + kept.joinToString(", ") { it.lowercase() })
             }
             // Always, even when nothing changed: also repairs an event left mismatched before.
-            readRow(id)?.takeIf { it[Events.RRULE] == null }?.let { alignLength(id, it) }
+            val plain = readRow(id)?.takeIf { it[Events.RRULE] == null }
+            plain?.let { alignLength(id, it) }
+            // What the phone actually draws (Instances) must end where the event now ends.
+            // Samsung's provider has kept the old length after every kind of update; then the
+            // event is made again with the right values and the old row removed (0.10.5).
+            val wantEnd = wanted[Events.DTEND] as Long?
+            val drawnEnd = if (plain != null && wantEnd != null) instanceEnd(id, wanted[Events.DTSTART] as Long) else null
+            if (drawnEnd != null && drawnEnd != wantEnd) {
+                val values = ContentValues().apply { wanted.forEach { (k, v) -> putAny(k, v) } }
+                val newId = resolver.insert(Events.CONTENT_URI, values)?.let(ContentUris::parseId) ?: error("다시 만들지 못했습니다")
+                writeReminders(newId, draft.reminderMinutes)
+                resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, id), null, null)
+                return@io newId.toString()
+            }
             if (reminders(id).sorted() != draft.reminderMinutes.sorted()) writeReminders(id, draft.reminderMinutes)
             id.toString()
         }
@@ -569,6 +582,19 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         copyEventId(master, toCalendarId, keepRule = true, excluded = emptyList())?.toString()
     }
 
+    /** Where the phone draws a plain event's occurrence starting at [start] to end; null if it draws none. */
+    private fun instanceEnd(eventId: Long, start: Long): Long? {
+        val uri = Instances.CONTENT_URI.buildUpon().also {
+            ContentUris.appendId(it, start - 86_400_000L)
+            ContentUris.appendId(it, start + 2 * 86_400_000L)
+        }.build()
+        return runCatching {
+            resolver.query(uri, arrayOf(Instances.END, Instances.BEGIN), "${Instances.EVENT_ID} = ?", arrayOf(eventId.toString()), null)?.use { c ->
+                if (c.moveToFirst()) c.getLong(0) else null
+            }
+        }.getOrNull()
+    }
+
     /**
      * A plain event whose provider kept a DURATION after we cleared it (Samsung's
      * does): occurrences are drawn from that length, so the event showed its old
@@ -723,6 +749,14 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             // A refused update is a failed write (the pass retries it), not a silent success.
             if (runCatching { resolver.update(ContentUris.withAppendedId(Events.CONTENT_URI, targetId.toLong()), v, null, null) }.getOrDefault(0) == 0) return@io null
             readRow(targetId.toLong())?.let { alignLength(targetId.toLong(), it) }
+            // The target still drawn with its old length: replace it with a fresh copy instead.
+            val drawn = instanceEnd(targetId.toLong(), src[Events.DTSTART] as Long)
+            if (drawn != null && drawn != endOf(src)) {
+                val cal = tgt[Events.CALENDAR_ID].toString()
+                val newId = copySeries(sourceId.toLong(), cal) ?: return@io null
+                resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, targetId.toLong()), null, null)
+                return@io newId.toString()
+            }
             resolver.delete(Reminders.CONTENT_URI, "${Reminders.EVENT_ID} = ?", arrayOf(targetId))
             copyReminders(sourceId.toLong(), targetId.toLong())
             targetId
