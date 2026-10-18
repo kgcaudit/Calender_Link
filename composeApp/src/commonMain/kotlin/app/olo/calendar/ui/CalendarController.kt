@@ -206,9 +206,9 @@ class CalendarController(
         scope.launch {
             // While OLO is open the bridge follows every change within seconds; the
             // platform's background work covers the rest. Its own writes settle in one pass.
-            store.changes().debounce(3_000).collect { if (_state.value.settings.bridgeOn) runBridge() }
+            store.changes().debounce(3_000).collect { if (_state.value.settings.bridgeOn) runBridge(trigger = "앱 · 변경 감지") }
         }
-        if (_state.value.settings.bridgeOn) runBridge()
+        if (_state.value.settings.bridgeOn) runBridge(trigger = "앱 열 때")
     }
 
     private fun bridgeConfig(): BridgeConfig? = _state.value.settings.let { st ->
@@ -222,19 +222,19 @@ class CalendarController(
     fun startBridge(samsungId: String, googleId: String, done: (Result<BridgeReport>) -> Unit = {}) {
         if (_state.value.settings.bridgeSamsungId != samsungId || _state.value.settings.bridgeGoogleId != googleId) bridge.forget()
         updateSettings { it.copy(bridgeSamsungId = samsungId, bridgeGoogleId = googleId) }
-        runBridge(done = done)
+        runBridge(trigger = "연결", done = done)
     }
 
     /** One pass now. [allowMassDelete] releases deletions held by the safety stop. */
-    fun runBridge(allowMassDelete: Boolean = false, retryRefused: Boolean = false, done: (Result<BridgeReport>) -> Unit = {}) {
+    fun runBridge(allowMassDelete: Boolean = false, retryRefused: Boolean = false, trigger: String = "앱", done: (Result<BridgeReport>) -> Unit = {}) {
         val config = bridgeConfig() ?: return
-        scope.launch { done(bridgePass(config, allowMassDelete, retryRefused)) }
+        scope.launch { done(bridgePass(config, allowMassDelete, retryRefused, trigger)) }
     }
 
-    private suspend fun bridgePass(config: BridgeConfig, allowMassDelete: Boolean, retryRefused: Boolean = false): Result<BridgeReport> {
+    private suspend fun bridgePass(config: BridgeConfig, allowMassDelete: Boolean, retryRefused: Boolean = false, trigger: String = "앱"): Result<BridgeReport> {
         run {
             val r = runCatching {
-                bridge.run(config, allowMassDelete, retryRefused) { d, t -> if (t > 0) _state.update { it.copy(bridgeProgress = d to t) } }
+                bridge.run(config, allowMassDelete, retryRefused, trigger) { d, t -> if (t > 0) _state.update { it.copy(bridgeProgress = d to t) } }
             }
             _state.update {
                 it.copy(
@@ -322,6 +322,8 @@ class CalendarController(
         }
     }
 
+    val bridgeEntries: List<app.olo.calendar.model.LogEntry> get() = bridge.entries
+    val bridgeLastQuiet: Long? get() = bridge.lastQuietCheck
     val bridgeLog: List<String> get() = bridge.log
 
     /** Stops the bridge; both calendars keep every event they hold. */
@@ -575,7 +577,7 @@ class CalendarController(
             delay(1500)
             var waited = 0
             while (waited < 60 && runCatching { store.syncActive(excluded) }.getOrDefault(false)) { delay(1000); waited++ }
-            val bridged = bridgeConfig()?.let { bridgePass(it, allowMassDelete = false).getOrNull() }
+            val bridged = bridgeConfig()?.let { bridgePass(it, allowMassDelete = false, trigger = "지금 동기화").getOrNull() }
             reloadNow()
             val s = _state.value
             val after = s.eventCounts.values.sum()

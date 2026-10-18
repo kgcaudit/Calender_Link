@@ -66,7 +66,7 @@ class BridgeWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val st = prefs.loadSettings()
         if (!granted || st.bridgeSamsungId == null || st.bridgeGoogleId == null) return Result.success()
         val store = AndroidCalendarStore(ctx)
-        val report = runCatching { BridgeEngine(store, prefs).run(BridgeConfig(st.bridgeSamsungId, st.bridgeGoogleId)) }
+        val report = runCatching { BridgeEngine(store, prefs).run(BridgeConfig(st.bridgeSamsungId, st.bridgeGoogleId), trigger = "백그라운드") }
         report.getOrNull()?.let { if (it.toGoogle + it.toSamsung + it.deleted > 0) store.requestSync() }
         // A content-triggered job runs once; arm the next one (our own writes settle in one pass).
         BridgeScheduler.armOnChange(ctx)

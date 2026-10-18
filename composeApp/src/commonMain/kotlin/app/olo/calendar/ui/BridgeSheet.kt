@@ -1,6 +1,12 @@
 package app.olo.calendar.ui
 
 import app.olo.calendar.model.koShort
+import androidx.compose.ui.text.style.TextOverflow
+import app.olo.calendar.design.color
+import app.olo.calendar.design.OloHue
+import app.olo.calendar.model.dayKo
+import app.olo.calendar.model.clockKo
+import app.olo.calendar.model.LogDir
 import kotlinx.datetime.toLocalDateTime
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -222,7 +228,7 @@ private fun BackgroundCard(state: CalendarUiState, batteryUnrestricted: Boolean,
                 error != null -> {
                     Text("마지막 맞춤이 실패했습니다", style = MaterialTheme.typography.titleSmall)
                     Text(error, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-                    OloTextButton("다시 맞추기", { controller.runBridge() }, enabled = state.bridgeProgress == null)
+                    OloTextButton("다시 맞추기", { controller.runBridge(retryRefused = true, trigger = "다시 맞추기") }, enabled = state.bridgeProgress == null)
                 }
                 else -> {
                     val hours = (stale ?: 0L) / 3_600_000L
@@ -356,7 +362,7 @@ private fun Connected(
                 Text("직접 지운 것이 아니라면 '되살리기'를 누르세요. 남아 있는 쪽에서 다시 복제합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OloButton("되살리기", { controller.keepBridgePending(); pending = emptyList() }, enabled = state.bridgeProgress == null)
-                    OloTextButton("양쪽에서 지우기", { controller.runBridge(allowMassDelete = true); pending = emptyList() })
+                    OloTextButton("양쪽에서 지우기", { controller.runBridge(allowMassDelete = true, trigger = "양쪽에서 지우기"); pending = emptyList() })
                 }
             }
         }
@@ -379,7 +385,7 @@ private fun Connected(
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
         OloTextButton("연결 해제", { controller.stopBridge(); onChanged(false); onDismiss() })
         Spacer(Modifier.weight(1f))
-        OloOutlinedButton("지금 맞추기", { controller.runBridge(retryRefused = true) }, enabled = state.bridgeProgress == null)
+        OloOutlinedButton("지금 맞추기", { controller.runBridge(retryRefused = true, trigger = "지금 맞추기") }, enabled = state.bridgeProgress == null)
         OloButton("닫기", onDismiss)
     }
 }
@@ -414,20 +420,65 @@ private fun RecoverCard(samsungId: String, googleId: String, state: CalendarUiSt
 @Composable
 private fun LogCard(controller: CalendarController) {
     var open by remember { mutableStateOf(false) }
-    val lines = controller.bridgeLog
-    if (lines.isEmpty()) return
+    val entries = controller.bridgeEntries
+    val legacy = controller.bridgeLog
+    val quiet = controller.bridgeLastQuiet
+    if (entries.isEmpty() && legacy.isEmpty() && quiet == null) return
+    val cs = MaterialTheme.colorScheme
+    val zone = controller.zone
     Text(
-        if (open) "최근 기록 접기" else "최근 기록 보기 (${lines.size})",
+        if (open) "주고받은 기록 접기" else "주고받은 기록 보기 (${entries.size})",
         style = MaterialTheme.typography.labelLarge, color = OloTone.accent,
         modifier = Modifier.clickable { open = !open }.padding(vertical = 6.dp),
     )
-    if (open) {
-        lines.take(20).forEach { line ->
+    if (!open) return
+    // Each pass that carried something: when, why, then each event — which way, what, and what changed.
+    quiet?.let {
+        Text("마지막 확인 ${dayKo(it, zone)} ${clockKo(it, zone)} · 바뀐 일정 없음", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+    }
+    entries.take(30).forEach { e ->
+        Column(
+            Modifier.fillMaxWidth().padding(top = 6.dp).background(cs.surfaceContainerLow, MaterialTheme.shapes.small).padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${dayKo(e.atMillis, zone)} ${clockKo(e.atMillis, zone)}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text(e.trigger, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            }
+            e.items.forEach { i ->
+                Row(verticalAlignment = Alignment.Top) {
+                    val (arrow, tint) = when (i.dir) {
+                        LogDir.TO_GOOGLE -> "S → G" to OloHue.SKY.color()
+                        LogDir.TO_SAMSUNG -> "G → S" to OloHue.VIDEO.color()
+                        LogDir.NONE -> "·" to cs.onSurfaceVariant
+                    }
+                    Text(arrow, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = tint, modifier = Modifier.width(44.dp).padding(top = 2.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                i.op, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold,
+                                color = when (i.op) { "삭제", "실패" -> cs.error; "새 일정" -> OloTone.accent; else -> cs.onSurface },
+                                modifier = Modifier.padding(end = 6.dp),
+                            )
+                            Text(i.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Text(
+                            dayKo(i.startMillis, zone) + " " + if (i.allDay) "종일" else "${clockKo(i.startMillis, zone)}–${clockKo(i.endMillis, zone)}",
+                            style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                        )
+                        if (i.detail.isNotBlank()) Text(i.detail, style = MaterialTheme.typography.labelSmall, color = OloTone.accent)
+                    }
+                }
+            }
+            if (e.note.isNotBlank()) Text(e.note, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        }
+    }
+    // Lines from before 0.10.8 (counts only), kept until they age out.
+    if (legacy.isNotEmpty()) {
+        Text("이전 기록 (개수만)", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+        legacy.take(5).forEach { line ->
             val at = line.substringBefore('|').toLongOrNull()
-            Text(
-                (at?.let { agoKo(it) + " · " } ?: "") + line.substringAfter('|'),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text((at?.let { agoKo(it) + " · " } ?: "") + line.substringAfter('|'), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         }
     }
 }

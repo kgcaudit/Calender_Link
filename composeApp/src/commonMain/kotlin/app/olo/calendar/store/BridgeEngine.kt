@@ -1,6 +1,12 @@
 package app.olo.calendar.store
 
 import app.olo.calendar.model.BridgeFields
+import app.olo.calendar.model.LogDir
+import app.olo.calendar.model.LogEntry
+import app.olo.calendar.model.LogItem
+import app.olo.calendar.model.decodeLog
+import app.olo.calendar.model.describeChange
+import app.olo.calendar.model.encodeLog
 import app.olo.calendar.model.BridgeItem
 import app.olo.calendar.model.decodeFields
 import app.olo.calendar.model.encodeFields
@@ -95,7 +101,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val keepS = pending.filterIsInstance<BridgeOp.DeleteSamsung>().map { it.samsungId }.toSet()
         val keepG = pending.filterIsInstance<BridgeOp.DeleteGoogle>().map { it.googleId }.toSet()
         links = links.filterNot { it.samsungId in keepS || it.googleId in keepG }
-        runLocked(config, allowMassDelete = false) { _, _ -> }
+        runLocked(config, allowMassDelete = false, { _, _ -> }, "되살리기(한쪽만 사라짐)")
     }
 
     /**
@@ -131,8 +137,8 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val items = recoverable(config)
         var n = 0
         items.forEach { if (store.bridgeRestore(it.id, config.samsungCalendarId) != null) n++ }
-        if (connected) runLocked(config, allowMassDelete = false) { _, _ -> }
-        appendLog("${Clock.System.now().toEpochMilliseconds()}|되살림 $n · " + items.take(12).joinToString(", ") { it.fields.title })
+        record(LogEntry(Clock.System.now().toEpochMilliseconds(), "되살리기", items.map { LogItem(LogDir.TO_SAMSUNG, "되살림", it.fields, "지워진 기록에서 Samsung으로") }))
+        if (connected) runLocked(config, allowMassDelete = false, { _, _ -> }, "되살린 뒤 맞춤")
         n
     }
 
@@ -178,8 +184,8 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
             if (key !in live && store.bridgeCreate(f, config.samsungCalendarId) != null) { n++; live += key }
         }
         prefs.put(KEY_AUTO_DELETED, null)
-        runLocked(config, allowMassDelete = false) { _, _ -> }
-        appendLog("${Clock.System.now().toEpochMilliseconds()}|자동 삭제 되돌림 $n · " + items.take(12).joinToString(", ") { it.second.title })
+        record(LogEntry(Clock.System.now().toEpochMilliseconds(), "되돌리기", items.map { LogItem(LogDir.TO_SAMSUNG, "되살림", it.second, "함께 지운 일정을 Samsung으로") }))
+        runLocked(config, allowMassDelete = false, { _, _ -> }, "되돌린 뒤 맞춤")
         n
     }
 
@@ -189,8 +195,17 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     /** The last passes, newest first, for the bridge sheet's record. */
     val log: List<String> get() = prefs.get(KEY_LOG).orEmpty().split('\n').filter { it.isNotBlank() }
 
-    private fun appendLog(line: String) {
-        prefs.put(KEY_LOG, (listOf(line) + log).take(40).joinToString("\n"))
+    /**
+     * The record (docs/07 §19), newest first: only passes that carried something,
+     * held something back or failed; each with its events.
+     */
+    val entries: List<LogEntry> get() = decodeLog(prefs.get(KEY_ENTRIES))
+
+    /** When a pass last looked and found nothing to do. */
+    val lastQuietCheck: Long? get() = prefs.get(KEY_LAST_CHECK)?.toLongOrNull()
+
+    private fun record(e: LogEntry) {
+        prefs.put(KEY_ENTRIES, encodeLog((listOf(e) + entries).take(60)))
     }
 
     suspend fun run(
@@ -198,10 +213,12 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         allowMassDelete: Boolean = false,
         /** A person asked ("지금 맞추기"): offer again what Google refused before. */
         retryRefused: Boolean = false,
+        /** For the record: what started this pass ("앱", "백그라운드", "지금 맞추기", …). */
+        trigger: String = "앱",
         onProgress: (Int, Int) -> Unit = { _, _ -> },
     ): BridgeReport = lock.withLock {
         if (retryRefused) refused = emptyMap()
-        runLocked(config, allowMassDelete, onProgress)
+        runLocked(config, allowMassDelete, onProgress, trigger)
     }
 
     /**
@@ -214,7 +231,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         links = links.map { if (it.samsungId == oldSamsungId) it.copy(samsungId = newSamsungId, samsungConfirmed = false) else it }
     }
 
-    private suspend fun runLocked(config: BridgeConfig, allowMassDelete: Boolean, onProgress: (Int, Int) -> Unit): BridgeReport {
+    private suspend fun runLocked(config: BridgeConfig, allowMassDelete: Boolean, onProgress: (Int, Int) -> Unit, trigger: String = "앱"): BridgeReport {
         val samsung = store.bridgeItems(config.samsungCalendarId)
         val google = store.bridgeItems(config.googleCalendarId)
         val plan = planBridge(samsung, google, links, allowMassDelete, refused = refused)
@@ -240,6 +257,8 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val gPrint = google.associate { it.id to it.fingerprint }
         val touched = HashSet<String>()
         val deletedTitles = mutableListOf<String>()
+        val items = mutableListOf<LogItem>()
+        val zone = kotlinx.datetime.TimeZone.currentSystemDefault()
         // Which edits went which way, for the record: shows at once if an edit was carried back.
         val toGoogleTitles = mutableListOf<String>()
         val toSamsungTitles = mutableListOf<String>()
@@ -259,26 +278,48 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
             val ok = runCatching {
                 when (op) {
                     is BridgeOp.Agree -> { pair(op.samsungId, op.googleId); true }
-                    is BridgeOp.CreateInGoogle -> store.bridgeCopy(op.samsungId, config.googleCalendarId)?.also { pair(op.samsungId, it) } != null
-                    is BridgeOp.CreateInSamsung -> store.bridgeCopy(op.googleId, config.samsungCalendarId)?.also { pair(it, op.googleId) } != null
-                    is BridgeOp.UpdateGoogle -> store.bridgeReplace(op.samsungId, op.googleId)?.also { pair(op.samsungId, it); toGoogleTitles += sPrintTitle(op.samsungId) } != null
-                    is BridgeOp.UpdateSamsung -> store.bridgeReplace(op.googleId, op.samsungId)?.also { newS ->
+                    is BridgeOp.CreateInGoogle -> (store.bridgeCopy(op.samsungId, config.googleCalendarId)?.also { pair(op.samsungId, it) } != null)
+                        .also { if (it) sById[op.samsungId]?.let { s -> items += LogItem(LogDir.TO_GOOGLE, "새 일정", s.fields) } }
+                    is BridgeOp.CreateInSamsung -> (store.bridgeCopy(op.googleId, config.samsungCalendarId)?.also { pair(it, op.googleId) } != null)
+                        .also { if (it) gById[op.googleId]?.let { g -> items += LogItem(LogDir.TO_SAMSUNG, "새 일정", g.fields) } }
+                    is BridgeOp.UpdateGoogle -> (store.bridgeReplace(op.samsungId, op.googleId)?.also { pair(op.samsungId, it); toGoogleTitles += sPrintTitle(op.samsungId) } != null)
+                        .also { if (it) sById[op.samsungId]?.let { s -> items += LogItem(LogDir.TO_GOOGLE, "수정", s.fields, describeChange(gById[op.googleId]?.fields, s.fields, zone)) } }
+                    is BridgeOp.UpdateSamsung -> (store.bridgeReplace(op.googleId, op.samsungId)?.also { newS ->
                         if (newS != op.samsungId) pairs.remove(op.samsungId)
                         pair(newS, op.googleId)
                         toSamsungTitles += gPrintTitle(op.googleId)
-                    } != null
+                    } != null).also { if (it) gById[op.googleId]?.let { g -> items += LogItem(LogDir.TO_SAMSUNG, "수정", g.fields, describeChange(sById[op.samsungId]?.fields, g.fields, zone)) } }
                     is BridgeOp.DeleteGoogle -> {
                         // Keep what is about to go, so a deletion carried over by itself can be undone.
                         if (!allowMassDelete) gById[op.googleId]?.let { keepForUndo(it.fields, googleSide = true) }
-                        store.bridgeDelete(op.googleId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += gPrintTitle(op.googleId); oloDeleted = oloDeleted + op.googleId } }
+                        store.bridgeDelete(op.googleId).also { if (it) {
+                            pairs.remove(op.samsungId); deleted++; deletedTitles += gPrintTitle(op.googleId); oloDeleted = oloDeleted + op.googleId
+                            gById[op.googleId]?.let { g -> items += LogItem(LogDir.TO_GOOGLE, "삭제", g.fields, "Samsung에서 사라짐") }
+                        } }
                     }
                     is BridgeOp.DeleteSamsung -> {
                         if (!allowMassDelete) sById[op.samsungId]?.let { keepForUndo(it.fields, googleSide = false) }
-                        store.bridgeDelete(op.samsungId).also { if (it) { pairs.remove(op.samsungId); deleted++; deletedTitles += sPrintTitle(op.samsungId); oloDeleted = oloDeleted + op.samsungId } }
+                        store.bridgeDelete(op.samsungId).also { if (it) {
+                            pairs.remove(op.samsungId); deleted++; deletedTitles += sPrintTitle(op.samsungId); oloDeleted = oloDeleted + op.samsungId
+                            sById[op.samsungId]?.let { s -> items += LogItem(LogDir.TO_SAMSUNG, "삭제", s.fields, "구글에서 사라짐") }
+                        } }
                     }
                 }
             }.getOrDefault(false)
-            if (!ok) failed++
+            if (!ok) {
+                failed++
+                // Which event, which way: the record shows what could not be written.
+                val (dir, f) = when (op) {
+                    is BridgeOp.CreateInGoogle -> LogDir.TO_GOOGLE to sById[op.samsungId]?.fields
+                    is BridgeOp.UpdateGoogle -> LogDir.TO_GOOGLE to sById[op.samsungId]?.fields
+                    is BridgeOp.DeleteGoogle -> LogDir.TO_GOOGLE to gById[op.googleId]?.fields
+                    is BridgeOp.CreateInSamsung -> LogDir.TO_SAMSUNG to gById[op.googleId]?.fields
+                    is BridgeOp.UpdateSamsung -> LogDir.TO_SAMSUNG to gById[op.googleId]?.fields
+                    is BridgeOp.DeleteSamsung -> LogDir.TO_SAMSUNG to sById[op.samsungId]?.fields
+                    is BridgeOp.Agree -> LogDir.NONE to null
+                }
+                if (f != null) items += LogItem(dir, "실패", f, "쓰기를 휴대폰이 받지 않음 · 다음 맞춤에서 다시 시도")
+            }
             if (op !is BridgeOp.Agree) onProgress(++done, total)
         }
 
@@ -305,13 +346,14 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
             conflicts = plan.conflicts, heldDeletes = plan.heldDeletes, failed = failed, linked = links.size,
         )
         prefs.put(KEY_REPORT, report.encode())
-        appendLog(
-            "${report.atMillis}|구글로 ${plan.toGoogle} · 삼성으로 ${plan.toSamsung} · 삭제 $deleted · 삭제 대기 ${plan.pendingDeletes.size}" +
-                " · 동기화 전 사라짐 ${plan.orphans.size} · 구글 불가 ${plan.unsupported} · 실패 $failed" +
-                (if (toGoogleTitles.isNotEmpty()) " | 구글로 고침: " + toGoogleTitles.take(8).joinToString(", ") else "") +
-                (if (toSamsungTitles.isNotEmpty()) " | 삼성으로 고침: " + toSamsungTitles.take(8).joinToString(", ") else "") +
-                (if (deletedTitles.isNotEmpty()) " | 지움: " + deletedTitles.take(12).joinToString(", ") else ""),
-        )
+        val note = listOfNotNull(
+            plan.pendingDeletes.size.takeIf { it > 0 }?.let { "삭제 대기 ${it}개 (확인 필요)" },
+            plan.conflicts.takeIf { it > 0 }?.let { "양쪽 수정 ${it}건 · Samsung 기준" },
+            plan.orphans.size.takeIf { it > 0 }?.let { "동기화 전 사라짐 ${it}개" },
+            plan.unsupported.takeIf { it > 0 }?.let { "구글이 받지 않는 일정 ${it}개" },
+        ).joinToString(" · ")
+        if (items.isEmpty() && note.isEmpty()) prefs.put(KEY_LAST_CHECK, report.atMillis.toString())
+        else record(LogEntry(report.atMillis, trigger, items, note))
         return report
     }
 
@@ -339,7 +381,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val gone = (planDedupe(store.bridgeItems(config.samsungCalendarId), paired) +
             planDedupe(store.bridgeItems(config.googleCalendarId), paired)).filter { store.bridgeDelete(it) }.toSet()
         links = links.filterNot { it.samsungId in gone || it.googleId in gone }
-        runLocked(config, allowMassDelete = false) { _, _ -> }
+        runLocked(config, allowMassDelete = false, { _, _ -> }, "중복 정리")
         gone.size
     }
 
@@ -363,6 +405,8 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         const val KEY_REPORT = "bridge.report"
         const val KEY_REFUSED = "bridge.refused"
         const val KEY_LOG = "bridge.log"
+        const val KEY_ENTRIES = "bridge.entries"
+        const val KEY_LAST_CHECK = "bridge.lastCheck"
         const val KEY_OLO_DELETED = "bridge.oloDeleted"
         const val KEY_AUTO_DELETED = "bridge.autoDeleted"
         const val RS = "\u001C"

@@ -279,6 +279,29 @@ class BridgeTest {
         assertEquals(10_000L + 3_600_000, store.fields(g).endMillis)
         assertTrue(engine.recentAutoDeleted.isEmpty())
     }
+
+    @Test
+    fun theRecordSaysWhatWentWhichWay() = runTest {
+        val store = FakeBridgeStore()
+        store.put("S", "s1", f("기전팀 보고", 10_000))
+        val engine = BridgeEngine(store, MemoryPreferences())
+        val cfg = BridgeConfig("S", "G")
+        engine.run(cfg, trigger = "연결")
+        val first = engine.entries.first()
+        assertEquals("연결", first.trigger)
+        assertEquals(listOf(app.olo.calendar.model.LogDir.TO_GOOGLE to "새 일정"), first.items.map { it.dir to it.op })
+        // A pass with nothing to do leaves no entry, only the time it looked.
+        engine.run(cfg)
+        assertEquals(1, engine.entries.size)
+        assertTrue(engine.lastQuietCheck != null)
+        // An edit on Samsung: one "수정" towards Google, saying what changed.
+        store.put("S", "s1", f("기전팀 보고", 10_000).copy(endMillis = 10_000 + 2 * 3_600_000))
+        engine.run(cfg, trigger = "백그라운드")
+        val edit = engine.entries.first().items.single()
+        assertEquals("수정", edit.op)
+        assertEquals(app.olo.calendar.model.LogDir.TO_GOOGLE, edit.dir)
+        assertTrue(edit.detail.startsWith("시간"), edit.detail)
+    }
 }
 
 /** Two calendars in memory, enough of CalendarStore for the bridge. */
