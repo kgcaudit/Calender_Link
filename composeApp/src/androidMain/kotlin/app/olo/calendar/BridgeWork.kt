@@ -30,14 +30,15 @@ object BridgeScheduler {
 
     fun schedule(context: Context) {
         val wm = WorkManager.getInstance(context)
-        armOnChange(context)
+        // KEEP: opening the app must not cancel a background pass halfway through its writes.
+        armOnChange(context, ExistingWorkPolicy.KEEP)
         wm.enqueueUniquePeriodicWork(
             PERIODIC, ExistingPeriodicWorkPolicy.KEEP,
             PeriodicWorkRequestBuilder<BridgeWorker>(15, TimeUnit.MINUTES).build(),
         )
     }
 
-    fun armOnChange(context: Context) {
+    fun armOnChange(context: Context, policy: ExistingWorkPolicy) {
         val constraints = Constraints.Builder()
             .addContentUriTrigger(CalendarContract.CONTENT_URI, true)
             // Let a burst of writes (a sync of hundreds of events) finish first.
@@ -45,7 +46,7 @@ object BridgeScheduler {
             .setTriggerContentMaxDelay(60, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
-            ON_CHANGE, ExistingWorkPolicy.REPLACE,
+            ON_CHANGE, policy,
             OneTimeWorkRequestBuilder<BridgeWorker>().setConstraints(constraints).build(),
         )
     }
@@ -69,7 +70,9 @@ class BridgeWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val report = runCatching { BridgeEngine(store, prefs).run(BridgeConfig(st.bridgeSamsungId, st.bridgeGoogleId), trigger = "백그라운드") }
         report.getOrNull()?.let { if (it.toGoogle + it.toSamsung + it.deleted > 0) store.requestSync() }
         // A content-triggered job runs once; arm the next one (our own writes settle in one pass).
-        BridgeScheduler.armOnChange(ctx)
-        return if (report.isSuccess) Result.success() else Result.retry()
+        // Appended behind this run, which REPLACE would cancel. A failed pass is not retried
+        // here: the next change or the periodic job runs it again.
+        BridgeScheduler.armOnChange(ctx, ExistingWorkPolicy.APPEND_OR_REPLACE)
+        return Result.success()
     }
 }

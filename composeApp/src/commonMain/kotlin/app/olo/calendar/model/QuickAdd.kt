@@ -27,7 +27,8 @@ data class QuickEntry(
  *   "이번주" → that day of this week, "다음주" → of next week;
  * - "M월 D일" / "M/D" that already passed this year → next year; "D일" that passed → next month;
  * - an hour without 오전/오후: 1–6 시 → afternoon, 7–11 → morning, 12 → noon;
- * - an end time not after the start is moved to the afternoon when it can be;
+ * - an end time not after the start is moved to the afternoon when it can be, else
+ *   (past midnight) the event ends at 23:59;
  * - no end → one hour.
  */
 object QuickAdd {
@@ -117,6 +118,8 @@ object QuickAdd {
         }
         val st = start
         if (st != null && end == null) end = if (st.hour >= 23) LocalTime(23, 59) else LocalTime(st.hour + 1, st.minute)
+        // An end past midnight ("오후 11시~1시") cannot be said on one day: end the day instead.
+        if (st != null && end != null && end!! <= st) end = LocalTime(23, 59)
 
         val title = rest.replace(Regex("\\s+"), " ").trim().trim(',', '.', '-', '~').trim()
         return QuickEntry(title.ifEmpty { "새 일정" }, date ?: baseDate, start, end)
@@ -133,7 +136,9 @@ object QuickAdd {
         }
         if (h > 24 || min > 59) return null
         h = when (q) {
-            "오후", "저녁", "밤" -> if (h < 12) h + 12 else h
+            // "밤 12시" is midnight, not noon.
+            "밤" -> if (h == 12) 0 else if (h < 12) h + 12 else h
+            "오후", "저녁" -> if (h < 12) h + 12 else h
             "오전", "아침", "새벽" -> if (h == 12) 0 else h
             "점심" -> if (h in 1..4) h + 12 else h
             else -> when {

@@ -60,7 +60,7 @@ class ViewsLogicTest {
     fun settingsRoundTrip() {
         val p = MemoryPreferences()
         assertEquals(AppSettings(), p.loadSettings())
-        val s = AppSettings(DayOfWeek.MONDAY, showLunar = false, showWeekNumbers = true, hidePastInAgenda = true, defaultCalendarId = "7", lastView = ViewMode.AGENDA)
+        val s = AppSettings(DayOfWeek.MONDAY, showLunar = false, showWeekNumbers = true, defaultCalendarId = "7", lastView = ViewMode.AGENDA)
         p.saveSettings(s)
         assertEquals(s, p.loadSettings())
     }

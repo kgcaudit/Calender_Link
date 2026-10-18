@@ -142,6 +142,29 @@ internal fun holidayNames(day: LocalDate, occurrences: List<Occurrence>, holiday
         .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
 
 /**
+ * Whether a day is a holiday, for the red numbers of every cell. The days the
+ * holiday calendars cover are worked out once per list (a year view asks for
+ * thousands of days), not by scanning every event for each cell.
+ */
+internal fun isHoliday(day: LocalDate, occurrences: List<Occurrence>, holidayCalendars: Set<String>): Boolean =
+    KoreanHolidays.on(day).isNotEmpty() || day in holidayDays(occurrences, holidayCalendars)
+
+private var holidayDaysCache: Triple<List<Occurrence>, Set<String>, Set<LocalDate>>? = null
+
+private fun holidayDays(occurrences: List<Occurrence>, holidayCalendars: Set<String>): Set<LocalDate> {
+    holidayDaysCache?.let { (o, c, days) -> if (o === occurrences && c == holidayCalendars) return days }
+    val days = buildSet {
+        occurrences.filter { it.calendarId in holidayCalendars && it.title.isNotBlank() }.forEach { o ->
+            var d = o.firstDay
+            var guard = 0
+            while (d <= o.lastDay && guard++ < 400) { add(d); d = d.plus(1, DateTimeUnit.DAY) }
+        }
+    }
+    holidayDaysCache = Triple(occurrences, holidayCalendars, days)
+    return days
+}
+
+/**
  * What the month grid draws as bars. A holiday calendar the person turned on
  * (Samsung's 공휴일, Google's 대한민국의 휴일) shows its names as rose bars, as
  * Samsung Calendar does — so ticking it makes 크리스마스 appear in the cell, not
@@ -335,18 +358,18 @@ private fun WeekPages(state: CalendarUiState, controller: CalendarController, ho
     val start = weekStartOf(state.selected, state.settings.weekStart)
     val offset = state.selected.toEpochDays() - start.toEpochDays()
     DatePager(
-        target = start.toEpochDays() / 7,
-        onSettle = { w -> controller.select(LocalDate.fromEpochDays(w * 7 + (start.toEpochDays() % 7) + offset)) },
+        target = start.toEpochDays().floorDiv(7),
+        onSettle = { w -> controller.select(LocalDate.fromEpochDays(w * 7 + (start.toEpochDays().mod(7)) + offset)) },
         modifier = Modifier.fillMaxSize(),
         key = state.settings.weekStart,
     ) { w ->
-        val first = LocalDate.fromEpochDays(w * 7 + (start.toEpochDays() % 7))
+        val first = LocalDate.fromEpochDays(w * 7 + (start.toEpochDays().mod(7)))
         val week = List(7) { first.plus(it, DateTimeUnit.DAY) }
         val month = YearMonth.of(week.firstOrNull { it == state.selected } ?: week[offset])
         Row(Modifier.fillMaxWidth().height(OloLayout.LinesRow).padding(horizontal = OloLayout.GridMarginCompact)) {
             WeekRow(
                 week = week, month = month, state = state,
-                events = gridEvents(state.occurrences, holidayCalendars),
+                events = remember(state.occurrences, holidayCalendars) { gridEvents(state.occurrences, holidayCalendars) },
                 holidayCalendars = holidayCalendars, onSelect = onSelect, textAlpha = 0f,
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
@@ -395,7 +418,7 @@ internal fun MonthGrid(
 ) {
     val days = monthGrid(month, state.settings.weekStart)
     val weeks = days.chunked(7)
-    val visibleEvents = gridEvents(state.occurrences, holidayCalendars)
+    val visibleEvents = remember(state.occurrences, holidayCalendars) { gridEvents(state.occurrences, holidayCalendars) }
     val selectedHere = state.selected in days && YearMonth.of(state.selected) == month
     // A neighbour page keeps the same row open as the selected one: the week holding the same weekday-and-number, else the first.
     val selectedWeek = weeks.indexOfFirst { state.selected in it }.coerceAtLeast(0)
@@ -513,7 +536,7 @@ private fun WeekRow(
                     isToday = day == state.today,
                     // The outline itself is drawn by the grid; the strip of stage 3 draws its own.
                     isSelected = selected && onSelectedPlaced == null,
-                    isHoliday = holidayNames(day, state.occurrences, holidayCalendars).isNotEmpty(),
+                    isHoliday = isHoliday(day, state.occurrences, holidayCalendars),
                     hidden = layout.hiddenPerDay[i],
                     lunarOn = state.settings.showLunar,
                     onClick = { onSelect(day) },
@@ -599,7 +622,7 @@ private fun DayCell(
 
 /** One event piece in a week row: a soft bar for all-day and multi-day, a tile and text for timed. */
 @Composable
-internal fun Segment(seg: WeekSegment, colW: Dp, gap: Dp, faded: Boolean, top: Dp = NumberRow) {
+internal fun Segment(seg: WeekSegment, colW: Dp, gap: Dp, faded: Boolean, top: Dp = NumberRow, onClick: (() -> Unit)? = null) {
     val o = seg.occurrence
     val hue = calendarColor(o.colorArgb)
     val alpha = if (faded) 0.38f else 1f
@@ -615,9 +638,11 @@ internal fun Segment(seg: WeekSegment, colW: Dp, gap: Dp, faded: Boolean, top: D
         topStart = if (seg.continuesBefore) 0.dp else r, bottomStart = if (seg.continuesBefore) 0.dp else r,
         topEnd = if (seg.continuesAfter) 0.dp else r, bottomEnd = if (seg.continuesAfter) 0.dp else r,
     )
+    // Placed after the offset, so the touch lands where the bar is drawn.
+    val tap = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
     if (o.allDay || seg.spansDays) {
         Box(
-            Modifier.offset(x = left, y = y).width(right - left).height(h)
+            Modifier.offset(x = left, y = y).width(right - left).height(h).then(tap)
                 .background(softFill(hue).copy(alpha = alpha), shape)
                 .padding(horizontal = 4.dp),
             contentAlignment = Alignment.CenterStart,
@@ -630,7 +655,7 @@ internal fun Segment(seg: WeekSegment, colW: Dp, gap: Dp, faded: Boolean, top: D
             )
         }
     } else {
-        Row(Modifier.offset(x = left, y = y).width(right - left).height(h).padding(start = 1.dp)) {
+        Row(Modifier.offset(x = left, y = y).width(right - left).height(h).then(tap).padding(start = 1.dp)) {
             Box(Modifier.padding(top = 4.dp).size(6.dp).background(hue.copy(alpha = alpha), RoundedCornerShape(2.dp)))
             Spacer(Modifier.width(3.dp))
             Text(title, fontSize = 10.sp, lineHeight = 13.sp, color = textColor, style = TitleStyle, maxLines = seg.height, overflow = TextOverflow.Ellipsis)

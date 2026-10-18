@@ -268,7 +268,7 @@ fun MoveSheet(
     controller: CalendarController,
     onDismiss: () -> Unit,
 ) {
-    if (from == null) { onDismiss(); return }
+    if (from == null) { LaunchedEffect(Unit) { onDismiss() }; return }
     var step by remember { mutableStateOf<MoveStep>(MoveStep.Loading) }
     var target by remember { mutableStateOf(targets.firstOrNull()) }
     LaunchedEffect(from.id) {
@@ -356,7 +356,8 @@ fun SettingsSheet(
     onChange: ((AppSettings) -> AppSettings) -> Unit,
     onDismiss: () -> Unit,
     /** Lets OLO see an account ("확인 필요"), then turns its sync on. */
-    onAllow: (String) -> Unit = {},
+    /** Allows an account OLO cannot see yet; the callback says whether the person did. */
+    onAllow: (String, (Boolean) -> Unit) -> Unit = { _, done -> done(false) },
 ) {
     val st = state.settings
     var picking by remember { mutableStateOf(false) }
@@ -514,7 +515,7 @@ private fun <T> SegmentedChoice(options: List<Pair<T, String>>, selected: T, onP
  * stay on this phone; an account OLO may not see yet asks to be allowed first.
  */
 @Composable
-private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSettings) -> AppSettings) -> Unit, onAllow: (String) -> Unit, onPicked: () -> Unit = {}) {
+private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSettings) -> AppSettings) -> Unit, onAllow: (String, (Boolean) -> Unit) -> Unit, onPicked: () -> Unit = {}) {
     val cs = MaterialTheme.colorScheme
     val st = state.settings
     val writable = state.calendars.filter { it.writable && !it.isHoliday }
@@ -579,8 +580,8 @@ private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSetting
             text = { Text("${c.accountName}은 OLO가 아직 동기화 상태를 확인하지 못한 계정입니다. 계정 선택 화면에서 한 번 허용하면 기본 캘린더로 쓰고 동기화도 켭니다.") },
             confirmButton = {
                 OloTextButton("허용하고 고르기", onClick = {
-                    onAllow(c.accountName)
-                    onChange { it.copy(defaultCalendarId = c.id) }
+                    // The default moves only once the account is allowed; cancelled, it stays as it was.
+                    onAllow(c.accountName) { ok -> if (ok) onChange { it.copy(defaultCalendarId = c.id) } }
                     ask = null
                     onPicked()
                 })

@@ -53,6 +53,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -190,7 +192,7 @@ private fun MiniMonth(
                     val isToday = d == state.today
                     val n = busy[d] ?: 0
                     val level = when { n <= 0 -> -1; n == 1 -> 0; n <= 3 -> 1; else -> 2 }
-                    val red = d.dayOfWeek == DayOfWeek.SUNDAY || holidayNames(d, state.occurrences, holidayCalendars).isNotEmpty()
+                    val red = d.dayOfWeek == DayOfWeek.SUNDAY || isHoliday(d, state.occurrences, holidayCalendars)
                     Box(
                         Modifier.weight(1f).height(18.dp).padding(horizontal = 1.dp)
                             .background(
@@ -264,9 +266,9 @@ fun TimeGridView(
     } else {
         val start = weekStartOf(state.selected, state.settings.weekStart)
         val offset = state.selected.toEpochDays() - start.toEpochDays()
-        val residue = start.toEpochDays() % 7
+        val residue = start.toEpochDays().mod(7)
         DatePager(
-            target = start.toEpochDays() / 7,
+            target = start.toEpochDays().floorDiv(7),
             onSettle = { w -> controller.select(LocalDate.fromEpochDays(w * 7 + residue + offset)) },
             modifier = Modifier.fillMaxSize(),
             key = state.settings.weekStart,
@@ -306,7 +308,7 @@ private fun TimeGridPage(
         } else {
             Row(Modifier.fillMaxWidth().padding(start = Gutter, end = 4.dp, bottom = 4.dp)) {
                 days.forEach { d ->
-                    val red = d.dayOfWeek == DayOfWeek.SUNDAY || holidayNames(d, state.occurrences, holidayCalendars).isNotEmpty()
+                    val red = d.dayOfWeek == DayOfWeek.SUNDAY || isHoliday(d, state.occurrences, holidayCalendars)
                     Column(Modifier.weight(1f).clickable { onPickDay(d) }, horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(d.dayOfWeek.koShort(), fontSize = 11.sp, color = if (red) cs.error else if (d.dayOfWeek == DayOfWeek.SATURDAY) saturdayColor() else cs.onSurfaceVariant)
                         val isToday = d == state.today
@@ -330,7 +332,7 @@ private fun TimeGridPage(
                 Box(Modifier.fillMaxWidth().height(LaneHeight * lanes + 4.dp)) {
                     layout.segments.filter { !single || it.startCol == 0 }.forEach { seg ->
                         val s = if (single) seg.copy(endCol = 0, continuesAfter = seg.occurrence.lastDay > days[0]) else seg
-                        Box(Modifier.clickable { onOpen(seg.occurrence) }) { Segment(s, colW, 0.dp, faded = false, top = 0.dp) }
+                        Segment(s, colW, 0.dp, faded = false, top = 0.dp, onClick = { onOpen(seg.occurrence) })
                     }
                 }
                 val hidden = layout.hiddenPerDay.take(days.size).sum()
@@ -389,7 +391,10 @@ private fun TimeGridPage(
                             }
                         }
                         if (d == state.today) {
-                            val now = Clock.System.now().toLocalDateTime(zone).time
+                            // Moves with the clock, a step a minute.
+                            val now by produceState(Clock.System.now().toLocalDateTime(zone).time, zone) {
+                                while (true) { delay(60_000 - Clock.System.now().toEpochMilliseconds() % 60_000); value = Clock.System.now().toLocalDateTime(zone).time }
+                            }
                             val y = HourHeight * ((now.hour * 60 + now.minute) / 60f)
                             Box(Modifier.offset(y = y).fillMaxWidth().height(2.dp).background(cs.primary))
                         }
@@ -420,6 +425,8 @@ fun AgendaView(state: CalendarUiState, controller: CalendarController, holidayCa
     // Month bands and day rows in one list; the fast scroller jumps along it.
     val byMonth = remember(days) { days.groupBy { YearMonth.of(it) } }
     val list = rememberLazyListState()
+    // Each tab starts at its top (today), not where the other tab was left.
+    LaunchedEffect(past) { list.scrollToItem(0) }
     Column(Modifier.fillMaxSize()) {
         AgendaTabs(past, controller::setAgendaPast)
         if (days.isEmpty()) {

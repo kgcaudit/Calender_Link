@@ -194,11 +194,17 @@ fun decodeMap(s: String?): Map<String, String> =
         if (i <= 0) null else part.substring(0, i) to part.substring(i + 1)
     }.toMap()
 
-/** Stored as "id=1,id=0" (calendar ids are numbers on Android, UUIDs on iOS: no '=' or ','). */
-fun encodeVisibility(map: Map<String, Boolean>): String = map.entries.joinToString(",") { "${it.key}=${if (it.value) 1 else 0}" }
+/**
+ * Stored as "key=1,key=0". Calendar ids carry no '=' or ',', but fold keys hold
+ * account names, which may: those characters (and '%') are written as %XX.
+ */
+fun encodeVisibility(map: Map<String, Boolean>): String = map.entries.joinToString(",") { "${escapeKey(it.key)}=${if (it.value) 1 else 0}" }
 
 fun decodeVisibility(s: String?): Map<String, Boolean> =
     s.orEmpty().split(',').mapNotNull { part ->
         val i = part.lastIndexOf('=')
-        if (i <= 0) null else part.substring(0, i) to (part.substring(i + 1) == "1")
+        if (i <= 0) null else unescapeKey(part.substring(0, i)) to (part.substring(i + 1) == "1")
     }.toMap()
+
+private fun escapeKey(k: String) = k.replace("%", "%25").replace(",", "%2C").replace("=", "%3D")
+private fun unescapeKey(k: String) = k.replace("%2C", ",").replace("%3D", "=").replace("%25", "%")

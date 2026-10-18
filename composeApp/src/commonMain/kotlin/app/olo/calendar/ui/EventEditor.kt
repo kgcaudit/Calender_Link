@@ -261,14 +261,7 @@ private fun RecurrenceEditor(
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text("간격", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(48.dp))
-        OutlinedTextField(
-            value = value.interval.toString(),
-            onValueChange = { t -> t.toIntOrNull()?.takeIf { it in 1..99 }?.let { onChange(value.copy(interval = it)) } },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.width(80.dp),
-            shape = MaterialTheme.shapes.small,
-        )
+        NumberField(value.interval, 1..99, Modifier.width(80.dp)) { onChange(value.copy(interval = it)) }
     }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         FilterChip(value.end == RecurrenceEnd.Never, { onChange(value.copy(end = RecurrenceEnd.Never)) }, { Text("계속") }, shape = MaterialTheme.shapes.extraSmall)
@@ -276,15 +269,7 @@ private fun RecurrenceEditor(
         FilterChip(value.end is RecurrenceEnd.Until, onPickUntil, { Text("날짜까지") }, shape = MaterialTheme.shapes.extraSmall)
     }
     when (val e = value.end) {
-        is RecurrenceEnd.Count -> OutlinedTextField(
-            value = e.times.toString(),
-            onValueChange = { t -> t.toIntOrNull()?.takeIf { it in 1..999 }?.let { onChange(value.copy(end = RecurrenceEnd.Count(it))) } },
-            label = { Text("반복 횟수") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.width(140.dp),
-            shape = MaterialTheme.shapes.small,
-        )
+        is RecurrenceEnd.Count -> NumberField(e.times, 1..999, Modifier.width(140.dp), label = "반복 횟수") { onChange(value.copy(end = RecurrenceEnd.Count(it))) }
         is RecurrenceEnd.Until -> Text("${e.lastDay.koDate()}까지", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.clickable(onClick = onPickUntil))
         RecurrenceEnd.Never -> Unit
     }
@@ -319,3 +304,27 @@ private fun TimeDialog(initial: LocalTime, onDismiss: () -> Unit, onPick: (Local
 
 private fun LocalDate.plusDays(n: Int): LocalDate = kotlinx.datetime.LocalDate.fromEpochDays(toEpochDays() + n)
 private fun LocalDate.daysUntilSafe(other: LocalDate): Int = maxOf(0, other.toEpochDays() - toEpochDays())
+
+/**
+ * A whole-number field that may be emptied while typing ("1" → "" → "3"): the
+ * text is kept as typed, and only a number inside [range] is passed on.
+ */
+@Composable
+private fun NumberField(value: Int, range: IntRange, modifier: Modifier, label: String? = null, onValue: (Int) -> Unit) {
+    var text by remember(value) { mutableStateOf(value.toString()) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { t ->
+            if (t.length <= range.last.toString().length && t.all { it.isDigit() }) {
+                text = t
+                t.toIntOrNull()?.takeIf { it in range }?.let { if (it != value) onValue(it) }
+            }
+        },
+        label = label?.let { { Text(it) } },
+        singleLine = true,
+        isError = text.toIntOrNull()?.let { it !in range } ?: true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier,
+        shape = MaterialTheme.shapes.small,
+    )
+}

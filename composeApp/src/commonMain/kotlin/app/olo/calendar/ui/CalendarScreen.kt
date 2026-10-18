@@ -129,7 +129,10 @@ fun CalendarScreen(
 
     val dayItems = state.occurrences.on(state.selected).filter { it.calendarId !in holidayCalendars }.sortedForDay()
     val dayHolidays = holidayNames(state.selected, state.occurrences, holidayCalendars)
-    val openEditor = { d: LocalDate, t: LocalTime? -> controller.newDraft(d, t)?.let { sheet = Sheet.Editor(it, null) }; Unit }
+    val openEditor = { d: LocalDate, t: LocalTime? ->
+        controller.newDraft(d, t)?.let { sheet = Sheet.Editor(it, null) } ?: controller.noCalendar()
+        Unit
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
         val wide = maxWidth >= WideLayout
@@ -300,7 +303,7 @@ fun CalendarScreen(
             state = state,
             onChange = controller::updateSettings,
             onDismiss = { sheet = Sheet.None },
-            onAllow = { account -> enableSync(account, state, controller, settings) { syncNote = it } },
+            onAllow = { account, allowed -> enableSync(account, state, controller, settings, allowed) { syncNote = it } },
         )
         is Sheet.Bridge -> BridgeSheet(
             samsung = state.calendarsById[s.samsungCalendarId],
@@ -390,7 +393,8 @@ private fun FlipTitle(title: String, order: Int) {
     var lastOrder by remember { mutableStateOf(order) }
     val turn = remember { androidx.compose.animation.core.Animatable(0f) }
     LaunchedEffect(title) {
-        if (title == face) return@LaunchedEffect
+        // Back to the shown title mid-turn (a swipe and straight back): just turn upright again.
+        if (title == face) { turn.animateTo(0f, tween(OloMotion.Short)); return@LaunchedEffect }
         val dir = if (order >= lastOrder) -1f else 1f
         lastOrder = order
         turn.animateTo(90f * dir, tween(OloMotion.Quick, easing = OloMotion.EmphasizedAccelerate))
@@ -700,7 +704,7 @@ private fun calendarNav(
     onShowOnly = controller::showOnly,
     onShowDefault = controller::showDefault,
     onFold = controller::setFolded,
-    onEnableSync = { account -> enableSync(account, state, controller, settings, onNote) },
+    onEnableSync = { account -> enableSync(account, state, controller, settings, onNote = onNote) },
     onEnableMaster = {
         controller.setMasterSync(true) { ok ->
             if (ok) onNote(SyncNote("휴대폰 자동 동기화를 켰습니다") { controller.setMasterSync(false); onNote(null) })
@@ -737,7 +741,10 @@ private fun moveOrBridge(state: CalendarUiState, calendarId: String): Sheet =
  * goes through the system account chooser first (Android 8+); if the phone
  * still refuses, that account's own sync page opens.
  */
-private fun enableSync(account: String, state: CalendarUiState, controller: CalendarController, settings: SystemSettings?, onNote: (SyncNote?) -> Unit) {
+private fun enableSync(
+    account: String, state: CalendarUiState, controller: CalendarController, settings: SystemSettings?,
+    allowed: (Boolean) -> Unit = {}, onNote: (SyncNote?) -> Unit,
+) {
     val turnOn = {
         controller.setAccountSync(account, true) { ok ->
             if (ok) {
@@ -749,10 +756,12 @@ private fun enableSync(account: String, state: CalendarUiState, controller: Cale
         }
     }
     if (account in state.sync.accountsNeedingAccess && settings != null) {
-        settings.allowAccount(account) { allowed ->
-            if (allowed) turnOn() else onNote(SyncNote("계정을 허용하지 않아 동기화를 켜지 못했습니다", null))
+        settings.allowAccount(account) { ok ->
+            allowed(ok)
+            if (ok) turnOn() else onNote(SyncNote("계정을 허용하지 않아 동기화를 켜지 못했습니다", null))
         }
     } else {
+        allowed(true)
         turnOn()
     }
 }

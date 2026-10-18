@@ -55,11 +55,9 @@ import kotlin.math.roundToInt
 @Composable
 fun FastScroller(list: LazyListState, label: (Int) -> String?, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
-    val info by remember { derivedStateOf { list.layoutInfo } }
-    val total = info.totalItemsCount
-    val visible = info.visibleItemsInfo.size.coerceAtLeast(1)
-    // Only worth it when the list runs well past one screen.
-    if (total <= visible * 3) return
+    // Counts, not the layout info itself (a new object every frame), so this recomposes only when they change.
+    val total by remember { derivedStateOf { list.layoutInfo.totalItemsCount } }
+    val visible by remember { derivedStateOf { list.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1) } }
     var held by remember { mutableStateOf(false) }
     var awake by remember { mutableStateOf(false) }
     LaunchedEffect(list.isScrollInProgress, held) {
@@ -73,6 +71,8 @@ fun FastScroller(list: LazyListState, label: (Int) -> String?, modifier: Modifie
             (list.firstVisibleItemIndex.toFloat() / last).coerceIn(0f, 1f)
         }
     }
+    // Only worth it when the list runs well past one screen.
+    if (total <= visible * 3) return
     // Laid over the whole list so the bubble has room; only the right edge takes touches.
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -86,8 +86,9 @@ fun FastScroller(list: LazyListState, label: (Int) -> String?, modifier: Modifie
             scope.launch { list.scrollToItem(target) }
             Unit
         }
+        // The edge takes touches only while the bar shows; hidden, taps reach the rows under it.
         Box(
-            Modifier.align(Alignment.TopEnd).fillMaxHeight().width(36.dp)
+            Modifier.align(Alignment.TopEnd).fillMaxHeight().width(if (awake) 36.dp else 12.dp)
                 .pointerInput(Unit) {
                     // One loop for touch and drag: down jumps, every move follows, up lets go.
                     awaitEachGesture {
@@ -107,10 +108,9 @@ fun FastScroller(list: LazyListState, label: (Int) -> String?, modifier: Modifie
                 }
                 .semantics { contentDescription = "목록 빠르게 이동" },
         ) {
-            val y = (fraction * trackPx).roundToInt()
-            // The thumb: a slim clay bar, wider while held.
+            // The thumb: a slim clay bar, wider while held. Its place is read at layout, not in composition.
             Box(
-                Modifier.align(Alignment.TopEnd).offset { IntOffset(0, y) }.padding(end = 4.dp)
+                Modifier.align(Alignment.TopEnd).offset { IntOffset(0, (fraction * trackPx).roundToInt()) }.padding(end = 4.dp)
                     .alpha(shown)
                     .size(width = if (held) 8.dp else 5.dp, height = thumbH)
                     .background(if (held) OloTone.solid else OloTone.solid.copy(alpha = 0.6f), RoundedCornerShape(4.dp)),
@@ -125,11 +125,10 @@ fun FastScroller(list: LazyListState, label: (Int) -> String?, modifier: Modifie
         ) {
             val text = label(list.firstVisibleItemIndex)
             if (text != null) {
-                val y = (fraction * trackPx).roundToInt()
                 Box(Modifier.width(maxWidth).height(maxHeight)) {
                     Box(
                         Modifier.align(Alignment.TopEnd)
-                            .offset { IntOffset(-with(density) { 40.dp.roundToPx() }, y) }
+                            .offset { IntOffset(-with(density) { 40.dp.roundToPx() }, (fraction * trackPx).roundToInt()) }
                             .height(thumbH)
                             .background(OloTone.solid, RoundedCornerShape(8.dp))
                             .padding(horizontal = 14.dp),

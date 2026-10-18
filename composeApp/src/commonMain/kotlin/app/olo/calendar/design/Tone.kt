@@ -33,6 +33,3 @@ object OloTone {
 
     private val dark: Boolean @Composable get() = MaterialTheme.colorScheme.background.luminanceIsDark()
 }
-
-/** Whether a background is a dark one (dark theme), for tokens outside this package. */
-fun Color.luminanceIsDarkPublic(): Boolean = luminanceIsDark()

@@ -66,4 +66,12 @@ class QuickAddTest {
         assertEquals(LocalTime(13, 0), p("점심 1시 약속").start)
         assertEquals(LocalTime(8, 0), p("8시 출발").start)
     }
+
+    @Test
+    fun endPastMidnightEndsTheDay() {
+        val e = p("오후 11시~1시 야간 작업")
+        assertEquals(LocalTime(23, 0), e.start)
+        assertEquals(LocalTime(23, 59), e.end)
+        assertEquals(LocalTime(0, 0), p("밤 12시 불꽃놀이").start)
+    }
 }

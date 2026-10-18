@@ -48,22 +48,22 @@ import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.store.BridgeReport
 import kotlinx.datetime.Clock
 
-/** "방금", "3분 전", "2시간 전", "어제". */
 /** "10월 19일 (월) 오후 1:30 – 오후 2:30", or the dates of an all-day event. */
 internal fun eventWhenKo(f: app.olo.calendar.model.BridgeFields, zone: kotlinx.datetime.TimeZone): String {
     fun day(d: kotlinx.datetime.LocalDate) = "${d.monthNumber}월 ${d.dayOfMonth}일 (${d.dayOfWeek.koShort()})"
-    fun time(t: kotlinx.datetime.LocalTime) = (if (t.hour < 12) "오전 " else "오후 ") + "${(t.hour + 11) % 12 + 1}:${t.minute.toString().padStart(2, '0')}"
     return if (f.allDay) {
         val a = app.olo.calendar.model.AllDay.firstDay(f.startMillis)
         val b = app.olo.calendar.model.AllDay.lastDay(f.startMillis, f.endMillis)
         if (a == b) "${day(a)} 종일" else "${day(a)} – ${day(b)} 종일"
     } else {
-        val s = kotlinx.datetime.Instant.fromEpochMilliseconds(f.startMillis).toLocalDateTime(zone)
-        val e = kotlinx.datetime.Instant.fromEpochMilliseconds(f.endMillis).toLocalDateTime(zone)
-        "${day(s.date)} ${time(s.time)} – " + (if (e.date != s.date) day(e.date) + " " else "") + time(e.time)
+        val a = app.olo.calendar.model.dayKo(f.startMillis, zone)
+        val b = app.olo.calendar.model.dayKo(f.endMillis, zone)
+        val clock = { m: Long -> app.olo.calendar.model.clockKo(m, zone) }
+        "$a ${clock(f.startMillis)} – " + (if (b != a) "$b " else "") + clock(f.endMillis)
     }
 }
 
+/** "방금", "3분 전", "2시간 전", "3일 전". */
 internal fun agoKo(atMillis: Long): String {
     val m = (Clock.System.now().toEpochMilliseconds() - atMillis) / 60_000
     return when {
@@ -90,7 +90,7 @@ fun BridgeSheet(
     batteryUnrestricted: Boolean = true,
     onBattery: () -> Unit = {},
 ) {
-    if (samsung == null) { onDismiss(); return }
+    if (samsung == null) { LaunchedEffect(Unit) { onDismiss() }; return }
     val connected = state.settings.bridgeSamsungId == samsung.id && state.settings.bridgeOn
     OloSheet(onDismiss = { if (state.bridgeProgress == null) onDismiss() }) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -128,7 +128,7 @@ private fun End(hue: androidx.compose.ui.graphics.Color, letter: String, title: 
         Box(Modifier.size(36.dp).background(hue, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
             Text(letter, fontWeight = FontWeight.Bold, color = OloTone.onSolid(hue))
         }
-        Text(title, style = MaterialTheme.typography.labelLarge, maxLines = 1, modifier = Modifier.padding(top = 6.dp))
+        Text(title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
         Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
@@ -371,7 +371,7 @@ private fun Connected(
     }
     val s = state.bridgeSamsung
     if (s != null && google != null) RecoverCard(s.id, google.id, state, controller)
-    LogCard(controller)
+    LogCard(state, controller)
     if (google != null && (google.accountName in state.sync.accountsWithSyncOff || google.accountName in state.sync.accountsNeedingAccess)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("${google.accountName} 동기화가 꺼져 있습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
@@ -420,11 +420,13 @@ private fun RecoverCard(samsungId: String, googleId: String, state: CalendarUiSt
 
 /** The bridge's record: what each pass did, deletions by title. */
 @Composable
-private fun LogCard(controller: CalendarController) {
+private fun LogCard(state: CalendarUiState, controller: CalendarController) {
     var open by remember { mutableStateOf(false) }
-    val entries = controller.bridgeEntries
-    val legacy = controller.bridgeLog
-    val quiet = controller.bridgeLastQuiet
+    // The record lives in prefs, not in state: read it again when a pass ends, not on every frame.
+    val passMark = Triple(state.bridgeReport, state.bridgeProgress, state.syncRun)
+    val entries = remember(passMark) { controller.bridgeEntries }
+    val legacy = remember(passMark) { controller.bridgeLog }
+    val quiet = remember(passMark) { controller.bridgeLastQuiet }
     if (entries.isEmpty() && legacy.isEmpty() && quiet == null) return
     val cs = MaterialTheme.colorScheme
     val zone = controller.zone

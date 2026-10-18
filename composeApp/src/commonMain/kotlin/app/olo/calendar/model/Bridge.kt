@@ -42,8 +42,8 @@ data class BridgeException(
     val endMillis: Long = 0,
 )
 
-/** One series as the bridge sees it. */
 /**
+ * One series as the bridge sees it.
  * [synced]: the sync adapter has given the row its server id (_SYNC_ID), i.e. the
  * event really reached Google / Samsung Cloud. A row that vanishes before that was
  * refused or replaced by the adapter, not deleted by a person (docs/07 §8).
@@ -56,10 +56,10 @@ data class BridgeItem(val id: String, val fields: BridgeFields, val synced: Bool
 
     /**
      * Two series in one calendar that are the same event to a person: same title,
-     * start, end and repeat rule, whatever their reminders, notes or colour (a
+     * start, end, repeat rule and place, whatever their reminders, notes or colour (a
      * copy restored from a deletion record has lost those).
      */
-    val twinKey: String = "$matchKey|${fields.endMillis}|${normaliseRrule(fields.rrule)}"
+    val twinKey: String = "$matchKey|${fields.endMillis}|${normaliseRrule(fields.rrule)}|${fields.location.trim().lowercase()}"
 
     /** How much a copy carries besides the essentials: the richer twin is the one kept. */
     val richness: Int get() = fields.reminderMinutes.size * 100 + fields.description.trim().length + fields.location.trim().length + fields.exceptions.size * 10
@@ -167,13 +167,9 @@ data class BridgePlan(
     fun count(kind: (BridgeOp) -> Boolean) = ops.count(kind)
     val toGoogle get() = count { it is BridgeOp.CreateInGoogle || it is BridgeOp.UpdateGoogle }
     val toSamsung get() = count { it is BridgeOp.CreateInSamsung || it is BridgeOp.UpdateSamsung }
-    val deletes get() = count { it is BridgeOp.DeleteGoogle || it is BridgeOp.DeleteSamsung }
     val paired get() = count { it is BridgeOp.Agree }
     val writes get() = ops.size - paired
 }
-
-/** Deleting more than this many series in one pass needs a person's yes (a cleared calendar, a lost account). */
-fun massDeleteLimit(linked: Int): Int = maxOf(5, linked / 5)
 
 /**
  * A pass carries deletions over by itself when there are at most this many
@@ -204,6 +200,7 @@ fun planBridge(
     val dropped = mutableListOf<BridgeLink>()
     val orphans = mutableListOf<BridgeLink>()
     var conflicts = 0
+    var unsupportedLinked = 0
     val linkedS = HashSet<String>()
     val linkedG = HashSet<String>()
 
@@ -227,7 +224,12 @@ fun planBridge(
                 val sChanged = si.fingerprint != l.samsungPrint
                 val gChanged = gi.fingerprint != l.googlePrint
                 if (sChanged && gChanged) conflicts++
-                ops += if (gChanged && !sChanged) BridgeOp.UpdateSamsung(gi.id, si.id) else BridgeOp.UpdateGoogle(si.id, gi.id)
+                when {
+                    gChanged && !sChanged -> ops += BridgeOp.UpdateSamsung(gi.id, si.id)
+                    // A rule Google cannot hold (lunar, X-) stays on Samsung; the old copy stays as it is.
+                    !googleCanHold(si.fields) -> unsupportedLinked++
+                    else -> ops += BridgeOp.UpdateGoogle(si.id, gi.id)
+                }
             }
         }
     }
@@ -243,11 +245,21 @@ fun planBridge(
     val usedG = HashSet<String>()
     for (si in samsung) {
         if (si.id in linkedS) continue
-        val gi = freeG[si.matchKey]?.removeFirstOrNull()
+        // Among same title-and-start candidates, the exact copy first, then the same event in
+        // all but reminders and notes, and only then the first one (e.g. a first connect).
+        val gi = freeG[si.matchKey]?.let { list ->
+            (list.firstOrNull { it.fingerprint == si.fingerprint } ?: list.firstOrNull { it.twinKey == si.twinKey } ?: list.firstOrNull())
+                ?.also { list.remove(it) }
+        }
         when {
             gi != null -> {
                 usedG += gi.id
-                ops += if (gi.fingerprint == si.fingerprint) BridgeOp.Agree(si.id, gi.id) else BridgeOp.UpdateGoogle(si.id, gi.id)
+                ops += when {
+                    gi.fingerprint == si.fingerprint -> BridgeOp.Agree(si.id, gi.id)
+                    googleCanHold(si.fields) -> BridgeOp.UpdateGoogle(si.id, gi.id)
+                    // Paired as they are: Google keeps its copy, Samsung keeps the rule Google cannot hold.
+                    else -> BridgeOp.Agree(si.id, gi.id)
+                }
             }
             si.twinKey in pairedSPrints -> duplicates++
             !googleCanHold(si.fields) -> unsupported++
@@ -265,7 +277,7 @@ fun planBridge(
     val carry = allowMassDelete || deletes.size <= autoDeleteLimit
     if (carry) ops += deletes
     val held = if (carry) 0 else deletes.size
-    return BridgePlan(ops, conflicts, held, dropped + orphans, duplicates, if (carry) emptyList() else deletes, orphans, unsupported)
+    return BridgePlan(ops, conflicts, held, dropped + orphans, duplicates, if (carry) emptyList() else deletes, orphans, unsupported + unsupportedLinked)
 }
 
 /**

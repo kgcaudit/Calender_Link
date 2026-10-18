@@ -86,7 +86,8 @@ data class Recurrence(
                 "YEARLY" -> Frequency.YEARLY
                 else -> return null
             }
-            val interval = map.remove("INTERVAL")?.toIntOrNull()?.takeIf { it >= 1 } ?: if ("INTERVAL" in map) return null else 1
+            // An INTERVAL OLO cannot read (0, text) leaves the rule raw rather than turning it into 1.
+            val interval = map.remove("INTERVAL")?.let { it.toIntOrNull()?.takeIf { n -> n >= 1 } ?: return null } ?: 1
             map.remove("WKST")
 
             var days = emptySet<DayOfWeek>()

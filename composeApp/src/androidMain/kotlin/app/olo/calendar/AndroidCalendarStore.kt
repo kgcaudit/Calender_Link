@@ -29,7 +29,6 @@ import app.olo.calendar.model.SyncStatus
 import app.olo.calendar.model.androidDuration
 import app.olo.calendar.model.at
 import app.olo.calendar.model.classifyAndroidAccount
-import app.olo.calendar.model.isGoogleHolidayCalendarId
 import app.olo.calendar.model.looksLikeHolidayCalendar
 import app.olo.calendar.model.parseExdates
 import app.olo.calendar.model.BridgeException
@@ -139,8 +138,7 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
         )
         val z = zone
         // Every calendar: OLO filters by its own visibility (docs/05), not the shared VISIBLE column.
-        val selection = extra
-        return resolver.query(uri, projection, selection, extraArgs, "${Instances.BEGIN} ASC").list { c ->
+        return resolver.query(uri, projection, extra, extraArgs, "${Instances.BEGIN} ASC").list { c ->
             val begin = c.long(Instances.BEGIN)
             val end = c.long(Instances.END)
             val allDay = c.int(Instances.ALL_DAY) == 1
@@ -219,13 +217,18 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             // create-then-delete: rewriting CALENDAR_ID would carry the old
             // account's sync id into the new one.
             if (movesCalendar && draft.keepExistingRule) {
-                wanted[Events.RRULE] = current!![Events.RRULE]
-                wanted[Events.DTEND] = null
+                // A series moves whole: its cancelled and changed occurrences go with it,
+                // then the editor's other changes land on the copy.
+                val oldId = draft.id!!.toLong()
+                val newId = copySeries(oldId, draft.calendarId) ?: error("반복 일정을 옮기지 못했습니다")
+                val edits = ContentValues().apply { wanted.forEach { (k, v) -> if (k != Events.CALENDAR_ID) putAny(k, v) } }
+                runCatching { resolver.update(ContentUris.withAppendedId(Events.CONTENT_URI, newId), edits, null, null) }
+                writeReminders(newId, draft.reminderMinutes)
+                resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, oldId), null, null)
+                return@io newId.toString()
             }
             val values = ContentValues().apply { wanted.forEach { (k, v) -> putAny(k, v) } }
-            val uri = resolver.insert(Events.CONTENT_URI, values) ?: error("insert returned null")
-            val id = ContentUris.parseId(uri)
-            writeReminders(id, draft.reminderMinutes)
+            val id = insertWithReminders(values, draft.reminderMinutes)
             if (movesCalendar) resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, draft.id!!.toLong()), null, null)
             id.toString()
         } else {
@@ -247,12 +250,23 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             // What the phone actually draws (Instances) must end where the event now ends.
             // Samsung's provider has kept the old length after every kind of update; then the
             // event is made again with the right values and the old row removed (0.10.5).
+            // Never for a changed occurrence of a series (a fresh row would leave the series)
+            // or an event with guests (they would get a cancellation and a new invitation).
             val wantEnd = wanted[Events.DTEND] as Long?
-            val drawnEnd = if (plain != null && wantEnd != null) instanceEnd(id, wanted[Events.DTSTART] as Long) else null
+            val recreatable = plain != null && plain[Events.ORIGINAL_ID] == null && !hasGuests(id)
+            val drawnEnd = if (recreatable && wantEnd != null) instanceEnd(id, wanted[Events.DTSTART] as Long) else null
             if (drawnEnd != null && drawnEnd != wantEnd) {
-                val values = ContentValues().apply { wanted.forEach { (k, v) -> putAny(k, v) } }
-                val newId = resolver.insert(Events.CONTENT_URI, values)?.let(ContentUris::parseId) ?: error("다시 만들지 못했습니다")
-                writeReminders(newId, draft.reminderMinutes)
+                val values = ContentValues().apply {
+                    wanted.forEach { (k, v) -> putAny(k, v) }
+                    // What the editor does not show, kept as the old row had it.
+                    seriesRows(id)?.first?.let { old ->
+                        (old[Events.EVENT_COLOR] as Long?)?.takeIf { it != 0L }?.let { put(Events.EVENT_COLOR, it.toInt()) }
+                        (old[Events.AVAILABILITY] as Long?)?.let { put(Events.AVAILABILITY, it) }
+                        (old[Events.ACCESS_LEVEL] as Long?)?.let { put(Events.ACCESS_LEVEL, it) }
+                    }
+                }
+                // The old row goes only once the new one stands complete.
+                val newId = insertWithReminders(values, draft.reminderMinutes)
                 resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, id), null, null)
                 return@io newId.toString()
             }
@@ -260,6 +274,24 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             id.toString()
         }
     }
+
+    /** Inserts an event and its reminders as one step: if the reminders fail, the event goes too. */
+    private fun insertWithReminders(values: ContentValues, minutes: List<Int>): Long {
+        val id = resolver.insert(Events.CONTENT_URI, values)?.let(ContentUris::parseId) ?: error("휴대폰 캘린더가 일정을 받지 않았습니다")
+        runCatching { writeReminders(id, minutes) }.onFailure { e ->
+            runCatching { resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, id), null, null) }
+            throw e
+        }
+        return id
+    }
+
+    private fun hasGuests(eventId: Long): Boolean = runCatching {
+        resolver.query(
+            CalendarContract.Attendees.CONTENT_URI, arrayOf(CalendarContract.Attendees._ID),
+            "${CalendarContract.Attendees.EVENT_ID} = ? AND ${CalendarContract.Attendees.ATTENDEE_RELATIONSHIP} != ?",
+            arrayOf(eventId.toString(), CalendarContract.Attendees.RELATIONSHIP_ORGANIZER.toString()), null,
+        )?.use { it.count > 0 } ?: false
+    }.getOrDefault(true)
 
     /** The columns OLO manages, as they should be after saving [d]. */
     private fun eventColumns(d: EventDraft): MutableMap<String, Any?> {
@@ -589,7 +621,7 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             ContentUris.appendId(it, start + 2 * 86_400_000L)
         }.build()
         return runCatching {
-            resolver.query(uri, arrayOf(Instances.END, Instances.BEGIN), "${Instances.EVENT_ID} = ?", arrayOf(eventId.toString()), null)?.use { c ->
+            resolver.query(uri, arrayOf(Instances.END), "${Instances.EVENT_ID} = ?", arrayOf(eventId.toString()), null)?.use { c ->
                 if (c.moveToFirst()) c.getLong(0) else null
             }
         }.getOrNull()

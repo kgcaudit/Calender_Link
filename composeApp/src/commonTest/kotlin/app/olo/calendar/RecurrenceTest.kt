@@ -97,4 +97,13 @@ class RecurrenceTest {
         assertEquals("P3D", androidDuration(true, start, LocalDate(2026, 10, 18), 0))
         assertEquals("P3600S", androidDuration(false, start, start, 3600))
     }
+
+    @Test
+    fun unreadableIntervalLeavesTheRuleRaw() {
+        val start = LocalDate(2026, 10, 16)
+        val seoul = TimeZone.of("Asia/Seoul")
+        assertNull(Recurrence.parse("RRULE:FREQ=DAILY;INTERVAL=0", start, seoul))
+        assertNull(Recurrence.parse("RRULE:FREQ=DAILY;INTERVAL=x", start, seoul))
+        assertEquals(2, Recurrence.parse("RRULE:FREQ=DAILY;INTERVAL=2", start, seoul)?.interval)
+    }
 }

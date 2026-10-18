@@ -178,12 +178,21 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val items = recentAutoDeleted
         val live = (store.bridgeItems(config.samsungCalendarId) + store.bridgeItems(config.googleCalendarId))
             .map { it.twinKey }.toMutableSet()
-        val back = items.map { it.second }.filter { f ->
+        val back = mutableListOf<BridgeFields>()
+        val failedLines = mutableListOf<BridgeFields>()
+        items.map { it.second }.forEach { f ->
             val key = BridgeItem("", f).twinKey
-            (key !in live && store.bridgeCreate(f, config.samsungCalendarId) != null).also { if (it) live += key }
+            when {
+                key in live -> Unit // already back another way
+                store.bridgeCreate(f, config.samsungCalendarId) != null -> { back += f; live += key }
+                else -> failedLines += f
+            }
         }
         val n = back.size
+        // Only what came back (or was already there) leaves the record; a failed one stays for another try.
+        val keep = recentAutoDeletedDetail.filter { a -> failedLines.any { it == a.fields } }
         prefs.put(KEY_AUTO_DELETED, null)
+        keep.reversed().forEach { keepForUndo(it.fields, it.googleSide) }
         if (back.isNotEmpty()) record(LogEntry(Clock.System.now().toEpochMilliseconds(), "되돌리기", back.map { LogItem(LogDir.TO_SAMSUNG, "되살림", it, "함께 지운 일정을 Samsung으로") }))
         runLocked(config, allowMassDelete = false, { _, _ -> }, "되돌린 뒤 맞춤")
         n
@@ -234,8 +243,21 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
      * sees an edit and updates the Google copy in place — no delete and re-create, and
      * the iPhone keeps the same event (0.10.6).
      */
-    suspend fun relink(oldSamsungId: String, newSamsungId: String) = lock.withLock {
+    suspend fun relink(oldSamsungId: String, newSamsungId: String) = lock.withLock { relinkLocked(oldSamsungId, newSamsungId) }
+
+    private fun relinkLocked(oldSamsungId: String, newSamsungId: String) {
         links = links.map { if (it.samsungId == oldSamsungId) it.copy(samsungId = newSamsungId, samsungConfirmed = false) else it }
+    }
+
+    /**
+     * Saves an edit to a Samsung event with no pass in between: if the store made the
+     * event again under a new id, the pair moves with it before any pass can read the
+     * old id as deleted (review 0.10.9).
+     */
+    suspend fun saveBridged(save: suspend () -> String, oldSamsungId: String): String = lock.withLock {
+        val newId = save()
+        if (newId != oldSamsungId) relinkLocked(oldSamsungId, newId)
+        newId
     }
 
     private suspend fun runLocked(config: BridgeConfig, allowMassDelete: Boolean, onProgress: (Int, Int) -> Unit, trigger: String = "앱"): BridgeReport {
@@ -289,16 +311,16 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
                         pair(newS, op.googleId)
                     } != null).also { if (it) gById[op.googleId]?.let { g -> items += LogItem(LogDir.TO_SAMSUNG, "수정", g.fields, describeChange(sById[op.samsungId]?.fields, g.fields, zone)) } }
                     is BridgeOp.DeleteGoogle -> {
-                        // Keep what is about to go, so a deletion carried over by itself can be undone.
-                        if (!allowMassDelete) gById[op.googleId]?.let { keepForUndo(it.fields, googleSide = true) }
                         store.bridgeDelete(op.googleId).also { if (it) {
+                            // Kept once it is really gone, so a deletion carried over by itself can be undone.
+                            if (!allowMassDelete) gById[op.googleId]?.let { g -> keepForUndo(g.fields, googleSide = true) }
                             pairs.remove(op.samsungId); deleted++; oloDeleted = oloDeleted + op.googleId
                             gById[op.googleId]?.let { g -> items += LogItem(LogDir.TO_GOOGLE, "삭제", g.fields, "Samsung에서 사라짐") }
                         } }
                     }
                     is BridgeOp.DeleteSamsung -> {
-                        if (!allowMassDelete) sById[op.samsungId]?.let { keepForUndo(it.fields, googleSide = false) }
                         store.bridgeDelete(op.samsungId).also { if (it) {
+                            if (!allowMassDelete) sById[op.samsungId]?.let { x -> keepForUndo(x.fields, googleSide = false) }
                             pairs.remove(op.samsungId); deleted++; oloDeleted = oloDeleted + op.samsungId
                             sById[op.samsungId]?.let { s -> items += LogItem(LogDir.TO_SAMSUNG, "삭제", s.fields, "구글에서 사라짐") }
                         } }
@@ -341,7 +363,10 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         }
         val report = BridgeReport(
             atMillis = Clock.System.now().toEpochMilliseconds(),
-            toGoogle = plan.toGoogle, toSamsung = plan.toSamsung, deleted = deleted,
+            // What really went across, not what was planned (a failed write is not "구글로 1").
+            toGoogle = items.count { it.dir == LogDir.TO_GOOGLE && it.op != "실패" && it.op != "삭제" },
+            toSamsung = items.count { it.dir == LogDir.TO_SAMSUNG && it.op != "실패" && it.op != "삭제" },
+            deleted = deleted,
             conflicts = plan.conflicts, heldDeletes = plan.heldDeletes, failed = failed, linked = links.size,
         )
         prefs.put(KEY_REPORT, report.encode())
@@ -354,9 +379,13 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         ).joinToString(" · ")
         // Held deletes and events Google cannot hold stay the same pass after pass: the same
         // note again with nothing carried is a quiet pass, not a new entry.
+        // Refusals only matter while the Samsung event is still the same one Google refused.
+        val sNowPrints = sNow.mapValues { it.value.fingerprint }
+        refused.filter { (id, print) -> sNowPrints[id] == print }.takeIf { it.size != refused.size }?.let { refused = it }
         val quiet = items.isEmpty() && failed == 0 && (note.isEmpty() || note == entries.firstOrNull()?.note)
         if (quiet) prefs.put(KEY_LAST_CHECK, report.atMillis.toString())
-        else record(LogEntry(report.atMillis, trigger, items, note))
+        // A first connect can carry thousands: keep the first 100 events, count the rest.
+        else record(LogEntry(report.atMillis, trigger, items.take(100), listOfNotNull(note.ifEmpty { null }, (items.size - 100).takeIf { it > 0 }?.let { "외 ${it}건" }).joinToString(" · ")))
         return report
     }
 
@@ -388,8 +417,11 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         gone.size
     }
 
-    /** Stops keeping pairs; both calendars keep every event they hold. */
-    fun forget() {
+    /**
+     * Stops keeping pairs; both calendars keep every event they hold. Under the lock:
+     * a pass still running would otherwise write the old pairs back after this.
+     */
+    suspend fun forget() = lock.withLock {
         prefs.put(KEY_LINKS, null)
         prefs.put(KEY_REPORT, null)
         prefs.put(KEY_REFUSED, null)

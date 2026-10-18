@@ -10,8 +10,6 @@ data class AppSettings(
     val weekStart: DayOfWeek = DayOfWeek.SUNDAY,
     val showLunar: Boolean = true,
     val showWeekNumbers: Boolean = false,
-    /** Agenda view starts from today instead of listing past days. */
-    val hidePastInAgenda: Boolean = false,
     /** Calendar for new events; null = the primary Google calendar. */
     val defaultCalendarId: String? = null,
     val lastView: ViewMode = ViewMode.MONTH,
@@ -58,7 +56,6 @@ fun Preferences.loadSettings(): AppSettings {
         weekStart = if (get("weekStart") == "MONDAY") DayOfWeek.MONDAY else DayOfWeek.SUNDAY,
         showLunar = get("showLunar")?.toBooleanStrictOrNull() ?: d.showLunar,
         showWeekNumbers = get("showWeekNumbers")?.toBooleanStrictOrNull() ?: d.showWeekNumbers,
-        hidePastInAgenda = get("hidePastInAgenda")?.toBooleanStrictOrNull() ?: d.hidePastInAgenda,
         defaultCalendarId = get("defaultCalendarId"),
         lastView = get("lastView")?.let { v -> ViewMode.entries.firstOrNull { it.name == v } } ?: d.lastView,
         monthStage = get("monthStage")?.toIntOrNull()?.coerceIn(1, 3) ?: d.monthStage,
@@ -76,7 +73,6 @@ fun Preferences.saveSettings(s: AppSettings) {
     put("weekStart", s.weekStart.name)
     put("showLunar", s.showLunar.toString())
     put("showWeekNumbers", s.showWeekNumbers.toString())
-    put("hidePastInAgenda", s.hidePastInAgenda.toString())
     put("defaultCalendarId", s.defaultCalendarId)
     put("lastView", s.lastView.name)
     put("monthStage", s.monthStage.toString())

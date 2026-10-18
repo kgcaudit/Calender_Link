@@ -100,19 +100,15 @@ data class CalendarUiState(
         get() = calendars.filter { it.kind.reachesGoogle && it.writable && !it.isHoliday }
             .sortedWith(compareBy({ !it.isPrimary }, { it.name }))
 
-    /** What stops events from reaching the other phone, each with its own fix (docs/05 §3.4). */
-    val syncActions: List<SyncAction>
-        get() = buildList {
-            if (!sync.masterSyncOn) add(SyncAction.MasterSyncOff)
+    /** Whether anything stops events from reaching the other phone (docs/05 §3.4). */
+    private val syncBlocked: Boolean
+        get() {
+            if (!sync.masterSyncOn) return true
             // Only the account that carries events to the iPhone matters: the Google main
             // account when the bridge is on, else any Google account switched off.
             val main = bridgeGoogle?.accountName
-            if (main != null) {
-                if (main in sync.accountsWithSyncOff || main in sync.accountsNeedingAccess) add(SyncAction.AccountSyncOff(main))
-            } else {
-                sync.accountsWithSyncOff.forEach { add(SyncAction.AccountSyncOff(it)) }
-            }
-            stranded.forEach { (c, n) -> add(SyncAction.Stranded(c, n)) }
+            val accountOff = if (main != null) main in sync.accountsWithSyncOff || main in sync.accountsNeedingAccess else sync.accountsWithSyncOff.isNotEmpty()
+            return accountOff || stranded.isNotEmpty()
         }
 
     /**
@@ -125,7 +121,7 @@ data class CalendarUiState(
     val syncUnreachable: Int
         get() = syncAccounts(calendars).count { it.accountName in sync.accountsNeedingAccess && it.syncKey !in settings.syncExcluded }
 
-    val needsSyncAttention: Boolean get() = syncActions.isNotEmpty() || (bridgeReport?.heldDeletes ?: 0) > 0 || bridgeDuplicates > 0
+    val needsSyncAttention: Boolean get() = syncBlocked || (bridgeReport?.heldDeletes ?: 0) > 0 || bridgeDuplicates > 0
 
     fun isShown(c: CalendarInfo): Boolean = settings.isShown(c)
 
@@ -139,9 +135,10 @@ data class CalendarUiState(
      * linking, the Google main calendar ([googleMainGuess]). Name order only last.
      */
     val autoCalendar: CalendarInfo?
-        get() = calendars.filter { it.writable && !it.isHoliday }.let { w ->
+        // Shown calendars first, so a new event never lands somewhere the person cannot see it.
+        get() = calendars.filter { it.writable && !it.isHoliday }.sortedBy { !isShown(it) }.let { w ->
             bridgeSamsung?.takeIf { bridgeGoogle != null && it in w }
-                ?: googleMainGuess
+                ?: googleMainGuess?.takeIf { it in w }
                 ?: w.firstOrNull { it.kind.reachesGoogle && it.isPrimary }
                 ?: w.firstOrNull { it.kind.reachesGoogle }
                 ?: w.firstOrNull()
@@ -220,9 +217,13 @@ class CalendarController(
 
     /** Joins Samsung Calendar to the Google main calendar and runs the first pass. */
     fun startBridge(samsungId: String, googleId: String, done: (Result<BridgeReport>) -> Unit = {}) {
-        if (_state.value.settings.bridgeSamsungId != samsungId || _state.value.settings.bridgeGoogleId != googleId) bridge.forget()
-        updateSettings { it.copy(bridgeSamsungId = samsungId, bridgeGoogleId = googleId) }
-        runBridge(trigger = "연결", done = done)
+        val changed = _state.value.settings.bridgeSamsungId != samsungId || _state.value.settings.bridgeGoogleId != googleId
+        scope.launch {
+            // Under the bridge's lock, so a pass still running for the old pair finishes first.
+            if (changed) bridge.forget()
+            updateSettings { it.copy(bridgeSamsungId = samsungId, bridgeGoogleId = googleId) }
+            runBridge(trigger = "연결", done = done)
+        }
     }
 
     /** One pass now. [allowMassDelete] releases deletions held by the safety stop. */
@@ -235,6 +236,11 @@ class CalendarController(
         run {
             val r = runCatching {
                 bridge.run(config, allowMassDelete, retryRefused, trigger) { d, t -> if (t > 0) _state.update { it.copy(bridgeProgress = d to t) } }
+            }
+            // Stopped or re-pointed while this pass ran: its result belongs to a pair no longer shown.
+            if (bridgeConfig() != config) {
+                _state.update { it.copy(bridgeProgress = null) }
+                return r
             }
             _state.update {
                 it.copy(
@@ -328,9 +334,9 @@ class CalendarController(
 
     /** Stops the bridge; both calendars keep every event they hold. */
     fun stopBridge() {
-        bridge.forget()
         updateSettings { it.copy(bridgeSamsungId = null, bridgeGoogleId = null) }
         _state.update { it.copy(bridgeLinkedGoogle = emptySet(), bridgeReport = null, occurrences = shownOf(it.allOccurrences, it.calendars, it.settings, emptySet())) }
+        scope.launch { bridge.forget() }
     }
 
     /** A month page settled: keep the day number (31 → the month's last day), or today in today's month. */
@@ -403,7 +409,11 @@ class CalendarController(
         scope.launch { reloadNow() }
     }
 
+    /** Counts reloads, so one that finishes after a newer one does not write its older range back. */
+    private var reloadGeneration = 0
+
     private suspend fun reloadNow() {
+        val generation = ++reloadGeneration
         run {
             val s = _state.value
             val (fromDay, toDay) = range(s)
@@ -412,6 +422,7 @@ class CalendarController(
             runCatching {
                 Loaded(store.calendars(), store.occurrences(from, to), store.syncStatus(), store.eventCounts())
             }.onSuccess { l ->
+                if (generation != reloadGeneration) return@onSuccess
                 _state.update {
                     it.copy(
                         rawCalendars = l.calendars, calendars = recolored(l.calendars, it.settings),
@@ -421,6 +432,7 @@ class CalendarController(
                     )
                 }
             }.onFailure { e ->
+                if (generation != reloadGeneration) return@onFailure
                 _state.update { it.copy(loading = false, error = e.message ?: "캘린더를 읽지 못했습니다.") }
             }
         }
@@ -486,7 +498,7 @@ class CalendarController(
                 occurrences = shownOf(it.allOccurrences, it.calendars, next, it.bridgeLinkedGoogle),
             )
         }
-        if (next.weekStart != before.weekStart || next.hidePastInAgenda != before.hidePastInAgenda) reload()
+        if (next.weekStart != before.weekStart) reload()
     }
 
     suspend fun load(id: String): StoredEvent? = store.event(id)
@@ -511,7 +523,10 @@ class CalendarController(
     fun quickAdd(text: String, done: (Result<Pair<EventDraft, String>>) -> Unit) {
         val s = _state.value
         val entry = app.olo.calendar.model.QuickAdd.parse(text, s.selected, todayNow)
-        val base = newDraft(entry.date) ?: return done(Result.failure(IllegalStateException("저장할 캘린더가 없습니다.")))
+        val base = newDraft(entry.date) ?: run {
+            noCalendar()
+            return done(Result.failure(IllegalStateException(NO_CALENDAR)))
+        }
         val draft = if (entry.start == null) {
             base.copy(title = entry.title, allDay = true, reminderMinutes = emptyList())
         } else {
@@ -523,12 +538,13 @@ class CalendarController(
 
     fun save(draft: EventDraft, done: (Result<String>) -> Unit = {}) {
         scope.launch {
-            val r = runCatching { store.save(draft) }
-            // Saved as a new event in Samsung Calendar (the provider kept the old one's length):
-            // the bridge pair moves with it, so Google gets an edit, not a delete and a copy.
-            val newId = r.getOrNull()
-            if (newId != null && draft.id != null && newId != draft.id && draft.calendarId == _state.value.settings.bridgeSamsungId) {
-                runCatching { bridge.relink(draft.id, newId) }
+            // An edit in Samsung Calendar may come back as a new event (the provider kept the old
+            // one's length): the bridge pair moves with it, under the bridge's lock so no pass sees
+            // the old event gone in between, and Google gets an edit, not a delete and a copy.
+            val oldId = draft.id
+            val r = runCatching {
+                if (oldId != null && draft.calendarId == _state.value.settings.bridgeSamsungId) bridge.saveBridged({ store.save(draft) }, oldId)
+                else store.save(draft)
             }
             r.onFailure { e -> _state.update { it.copy(error = "저장하지 못했습니다: ${e.message}") } }
             done(r)
@@ -607,6 +623,9 @@ class CalendarController(
 
     fun dismissError() = _state.update { it.copy(error = null) }
 
+    /** Nowhere to put a new event (every calendar read-only or hidden): say so instead of doing nothing. */
+    fun noCalendar() = _state.update { it.copy(error = NO_CALENDAR) }
+
     /** A new event on [day]; at [start] for an hour when given (a tap in the time grid). */
     fun newDraft(day: LocalDate = _state.value.selected, start: kotlinx.datetime.LocalTime? = null): EventDraft? {
         val cal = _state.value.defaultCalendar ?: return null
@@ -629,11 +648,6 @@ data class SyncRun(
 )
 
 /** One reason events might not reach the other phone. */
-sealed interface SyncAction {
-    data object MasterSyncOff : SyncAction
-    data class AccountSyncOff(val account: String) : SyncAction
-    data class Stranded(val calendar: CalendarInfo, val count: Int) : SyncAction
-}
 
 private fun AppSettings.hueOf(id: String): OloHue? = hues[id]?.let { n -> OloHue.entries.firstOrNull { it.name == n } }
 
@@ -661,3 +675,5 @@ private class Loaded(
     val sync: SyncStatus,
     val counts: Map<String, Int>,
 )
+
+private const val NO_CALENDAR = "새 일정을 저장할 수 있는 캘린더가 없습니다."

@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import app.olo.calendar.model.SyncKind
 import app.olo.calendar.design.color
 import app.olo.calendar.design.OloTone
-import app.olo.calendar.design.luminanceIsDarkPublic
+import app.olo.calendar.design.luminanceIsDark
 import app.olo.calendar.design.OloHue
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.drawBehind
@@ -56,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.clip
 import androidx.compose.animation.core.animateFloat
@@ -126,7 +127,7 @@ internal fun ViewMode.icon(): ImageVector = when (this) {
 }
 
 /**
- * Phone menu drawer, 280dp (docs/06): title and the five views stay put as a
+ * Phone menu drawer, [OloLayout.DrawerWidth] wide (docs/06): title and the five views stay put as a
  * fixed head; the calendar tree scrolls under it.
  */
 @Composable
@@ -423,7 +424,7 @@ private fun MainSection(samsung: CalendarInfo, google: CalendarInfo, rest: List<
     val n = s.eventCounts[samsung.id] ?: 0
     val issue = google.accountName in s.sync.accountsWithSyncOff || google.accountName in s.sync.accountsNeedingAccess ||
         (s.bridgeReport?.heldDeletes ?: 0) > 0 || s.bridgeDuplicates > 0
-    val green = if (cs.background.luminanceIsDarkPublic()) Color(0xFF8FD1AE) else Color(0xFF2F6B4F)
+    val green = if (cs.background.luminanceIsDark()) Color(0xFF8FD1AE) else Color(0xFF2F6B4F)
     Surface(
         color = cs.surfaceContainerLowest,
         shape = MaterialTheme.shapes.medium,
@@ -460,7 +461,7 @@ private fun MainSection(samsung: CalendarInfo, google: CalendarInfo, rest: List<
                         Spacer(Modifier.width(4.dp))
                         Text(
                             listOfNotNull(label, "일정 $n".takeIf { n > 0 }, s.bridgeReport?.let { "맞춤 ${agoKo(it.atMillis)}" }).joinToString(" · "),
-                            fontSize = 11.sp, color = color, maxLines = 1,
+                            fontSize = 11.sp, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -629,7 +630,7 @@ private fun AccountCard(account: AccountGroup, nav: NavActions, shown: (String) 
 @Composable
 private fun SyncChip(account: AccountGroup, nav: NavActions) {
     val cs = MaterialTheme.colorScheme
-    val dark = cs.background.luminanceIsDarkPublic()
+    val dark = cs.background.luminanceIsDark()
     when (account.status) {
         AccountStatus.SYNCING -> {
             var menu by remember { mutableStateOf(false) }
@@ -880,6 +881,24 @@ private fun DrawerRow(icon: ImageVector, text: String, onClick: () -> Unit) {
 }
 
 /**
+ * The sync icon turning. Its own composable so the endless animation exists only
+ * while a sync runs (the drawer is composed even when closed), and the angle is
+ * read in the layer, not in composition.
+ */
+@Composable
+private fun SpinningSyncIcon() {
+    val spin = androidx.compose.animation.core.rememberInfiniteTransition()
+    val angle by spin.animateFloat(
+        0f, 360f,
+        androidx.compose.animation.core.infiniteRepeatable(tween<Float>(900, easing = androidx.compose.animation.core.LinearEasing)),
+    )
+    Icon(
+        OloIcons.Sync, contentDescription = null, tint = OloTone.accent,
+        modifier = Modifier.size(OloLayout.IconSize).graphicsLayer { rotationZ = angle },
+    )
+}
+
+/**
  * "지금 동기화" with its outcome underneath (docs/04): the icon turns while the
  * phone syncs, then the line says what came in, how many events the bridge
  * matched, and whether some accounts may have been skipped.
@@ -889,22 +908,14 @@ private fun SyncNowRow(state: CalendarUiState, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val run = state.syncRun
     val running = run?.running == true
-    val spin = androidx.compose.animation.core.rememberInfiniteTransition()
-    val angle by spin.animateFloat(
-        0f, 360f,
-        androidx.compose.animation.core.infiniteRepeatable(tween<Float>(900, easing = androidx.compose.animation.core.LinearEasing)),
-    )
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = OloLayout.TouchTarget)
             .clickable(enabled = !running, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            OloIcons.Sync, contentDescription = null,
-            tint = if (running) OloTone.accent else LocalContentColor.current,
-            modifier = Modifier.size(OloLayout.IconSize).rotate(if (running) angle else 0f),
-        )
+        if (running) SpinningSyncIcon()
+        else Icon(OloIcons.Sync, contentDescription = null, modifier = Modifier.size(OloLayout.IconSize))
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
             Text(if (running) "동기화 중…" else "지금 동기화", style = MaterialTheme.typography.bodyLarge)

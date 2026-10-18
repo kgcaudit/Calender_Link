@@ -210,4 +210,12 @@ class CalendarGroupsTest {
         // A calendar that can no longer be written falls back to 자동.
         assertEquals("16", ui(st.copy(defaultCalendarId = "8")).defaultCalendar?.id)
     }
+
+    @Test
+    fun foldKeysWithCommasAndEqualsRoundTrip() {
+        val m = mapOf("SAMSUNG/com.osp/a,b=c" to true, "12" to false, "x%2Cy" to true)
+        assertEquals(m, decodeVisibility(encodeVisibility(m)))
+        // Strings written before escaping still read the same.
+        assertEquals(mapOf("12" to true, "13" to false), decodeVisibility("12=1,13=0"))
+    }
 }
