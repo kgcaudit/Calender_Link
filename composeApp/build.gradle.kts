@@ -61,8 +61,8 @@ android {
         applicationId = "app.olo.calendar"
         minSdk = 26
         targetSdk = 36
-        versionCode = 31
-        versionName = "0.10.3"
+        versionCode = 32
+        versionName = "0.10.4"
     }
 
     buildTypes {

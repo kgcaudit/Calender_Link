@@ -241,6 +241,8 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
                     .filter { k -> changed.containsKey(k) && !sameValue(after?.get(k), wanted[k]) }
                 if (kept.isNotEmpty()) error("휴대폰 캘린더가 일부 항목을 바꾸지 않았습니다: " + kept.joinToString(", ") { it.lowercase() })
             }
+            // Always, even when nothing changed: also repairs an event left mismatched before.
+            readRow(id)?.takeIf { it[Events.RRULE] == null }?.let { alignLength(id, it) }
             if (reminders(id).sorted() != draft.reminderMinutes.sorted()) writeReminders(id, draft.reminderMinutes)
             id.toString()
         }
@@ -539,6 +541,9 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
 
     override suspend fun bridgeItems(calendarId: String): List<BridgeItem> = io {
         val rows = sourceRows(calendarId)
+        // Plain events whose DURATION disagrees with DTEND show the wrong end everywhere: mend them.
+        rows.filter { !it.repeats() && !it.isException() && it[Events.DURATION] != null && it[Events.DTEND] != null }
+            .forEach { alignLength(it.id(), it) }
         val exceptions = rows.filter { it.isException() }.groupBy { it[Events.ORIGINAL_ID].toString() }
         val alarms = remindersOf(rows.map { it.id() })
         rows.filterNot { it.isException() }.map { m ->
@@ -562,6 +567,23 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             Events.CONTENT_URI, moveColumns, "${Events._ID} = ?", arrayOf(deletedId), null,
         ).list { c -> rowOf(c, moveColumns) }.firstOrNull() ?: return@io null
         copyEventId(master, toCalendarId, keepRule = true, excluded = emptyList())?.toString()
+    }
+
+    /**
+     * A plain event whose provider kept a DURATION after we cleared it (Samsung's
+     * does): occurrences are drawn from that length, so the event showed its old
+     * end (0.10.4). Rewrite the length to match DTEND.
+     */
+    private fun alignLength(id: Long, row: Map<String, Any?>) {
+        val dur = row[Events.DURATION] as String? ?: return
+        val start = row[Events.DTSTART] as Long? ?: return
+        val end = row[Events.DTEND] as Long? ?: return
+        val allDay = row[Events.ALL_DAY] == 1L
+        val want = if (allDay) "P${maxOf(1L, (end - start) / 86_400_000L)}D" else "P${maxOf(0L, (end - start) / 1000)}S"
+        if (durationMillis(dur) == end - start) return
+        runCatching {
+            resolver.update(ContentUris.withAppendedId(Events.CONTENT_URI, id), ContentValues().apply { put(Events.DURATION, want) }, null, null)
+        }
     }
 
     private fun endOf(r: Map<String, Any?>): Long {
@@ -700,6 +722,7 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             }
             // A refused update is a failed write (the pass retries it), not a silent success.
             if (runCatching { resolver.update(ContentUris.withAppendedId(Events.CONTENT_URI, targetId.toLong()), v, null, null) }.getOrDefault(0) == 0) return@io null
+            readRow(targetId.toLong())?.let { alignLength(targetId.toLong(), it) }
             resolver.delete(Reminders.CONTENT_URI, "${Reminders.EVENT_ID} = ?", arrayOf(targetId))
             copyReminders(sourceId.toLong(), targetId.toLong())
             targetId
