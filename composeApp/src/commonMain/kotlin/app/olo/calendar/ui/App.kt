@@ -58,6 +58,14 @@ interface SystemSettings {
     fun askBatteryUnrestricted() {}
 }
 
+/** Where to land when OLO is opened from outside (a widget tap, docs/09 §6). */
+sealed interface OpenRequest {
+    data class Day(val date: kotlinx.datetime.LocalDate) : OpenRequest
+    data class Event(val eventId: String, val beginMillis: Long) : OpenRequest
+    data class NewEvent(val date: kotlinx.datetime.LocalDate) : OpenRequest
+    data object Bridge : OpenRequest
+}
+
 @Composable
 fun App(
     store: CalendarStore,
@@ -65,6 +73,11 @@ fun App(
     settings: SystemSettings? = null,
     use24Hour: Boolean = true,
     prefs: Preferences = MemoryPreferences(),
+    /** The latest outside request; [onOpened] clears it once handled. */
+    openRequest: StateFlow<OpenRequest?>? = null,
+    onOpened: () -> Unit = {},
+    /** Events or what is shown changed: the platform refreshes its widgets. */
+    onChanged: () -> Unit = {},
 ) {
     OloTheme {
       androidx.compose.runtime.CompositionLocalProvider(LocalUse24Hour provides use24Hour) {
@@ -72,8 +85,9 @@ fun App(
             val granted by permissions.granted.collectAsState()
             if (granted) {
                 val scope = rememberCoroutineScope()
-                val controller = remember(store) { CalendarController(store, scope, prefs = prefs) }
-                CalendarScreen(controller, settings)
+                val controller = remember(store) { CalendarController(store, scope, prefs = prefs, onChanged = onChanged) }
+                val request = openRequest?.collectAsState()?.value
+                CalendarScreen(controller, settings, request = request, onRequestHandled = onOpened)
             } else {
                 val forGood by permissions.deniedForGood.collectAsState()
                 PermissionScreen(forGood, permissions::request, permissions::openSettings)

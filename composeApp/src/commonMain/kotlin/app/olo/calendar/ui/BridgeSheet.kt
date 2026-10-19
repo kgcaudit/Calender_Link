@@ -66,15 +66,7 @@ internal fun eventWhenKo(f: app.olo.calendar.model.BridgeFields, zone: kotlinx.d
 }
 
 /** "방금", "3분 전", "2시간 전", "3일 전". */
-internal fun agoKo(atMillis: Long): String {
-    val m = (Clock.System.now().toEpochMilliseconds() - atMillis) / 60_000
-    return when {
-        m < 1 -> "방금"
-        m < 60 -> "${m}분 전"
-        m < 24 * 60 -> "${m / 60}시간 전"
-        else -> "${m / (24 * 60)}일 전"
-    }
-}
+internal fun agoKo(atMillis: Long): String = app.olo.calendar.model.agoText(atMillis, Clock.System.now().toEpochMilliseconds())
 
 /**
  * "Google 메인 캘린더와 연결" (docs/07): Samsung Calendar stays as it is, and the

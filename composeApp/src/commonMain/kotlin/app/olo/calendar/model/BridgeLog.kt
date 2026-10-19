@@ -96,6 +96,17 @@ private val LEGACY_WORDS = listOf(
     "구글로 " to "Google로 ",
 )
 
+/** "방금", "3분 전", "2시간 전", "3일 전": how long before [nowMillis]. */
+fun agoText(atMillis: Long, nowMillis: Long): String {
+    val m = (nowMillis - atMillis) / 60_000
+    return when {
+        m < 1 -> "방금"
+        m < 60 -> "${m}분 전"
+        m < 24 * 60 -> "${m / 60}시간 전"
+        else -> "${m / (24 * 60)}일 전"
+    }
+}
+
 /** "오후 1:30" in [zone]. */
 fun clockKo(millis: Long, zone: TimeZone): String {
     val t = Instant.fromEpochMilliseconds(millis).toLocalDateTime(zone).time

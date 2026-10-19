@@ -1,5 +1,9 @@
 package app.olo.calendar.ui
 
+import kotlinx.datetime.Instant
+import kotlin.time.Duration.Companion.days
+import app.olo.calendar.model.hueOf
+import app.olo.calendar.model.shownOccurrences
 import app.olo.calendar.model.AppSettings
 import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.model.SyncKind
@@ -173,6 +177,8 @@ class CalendarController(
     private val scope: CoroutineScope,
     val zone: TimeZone = TimeZone.currentSystemDefault(),
     private val prefs: Preferences = MemoryPreferences(),
+    /** Events, what is shown, or the bridge's state changed: the platform refreshes its widgets. */
+    private val onChanged: () -> Unit = {},
 ) {
     val todayNow: LocalDate get() = Clock.System.now().toLocalDateTime(zone).date
 
@@ -248,11 +254,12 @@ class CalendarController(
                     bridgeLinkedGoogle = bridge.linkedGoogleIds(),
                     bridgeReport = r.getOrNull() ?: it.bridgeReport,
                     bridgeError = r.exceptionOrNull()?.let { e -> e.message ?: e::class.simpleName ?: "알 수 없는 오류" },
-                    occurrences = shownOf(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
+                    occurrences = shownOccurrences(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
                 )
             }
             val d = runCatching { bridge.findDuplicates(config) }.getOrNull()
             if (d != null) _state.update { it.copy(bridgeDuplicates = d.first + d.second) }
+            onChanged()
             if (r.getOrNull()?.let { it.toGoogle + it.toSamsung + it.deleted > 0 } == true) store.requestSync()
             return r
         }
@@ -273,7 +280,7 @@ class CalendarController(
                     bridgeDuplicates = 0,
                     bridgeLinkedGoogle = bridge.linkedGoogleIds(),
                     bridgeReport = bridge.lastReport ?: it.bridgeReport,
-                    occurrences = shownOf(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
+                    occurrences = shownOccurrences(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
                 )
             }
             store.requestSync()
@@ -335,7 +342,7 @@ class CalendarController(
     /** Stops the bridge; both calendars keep every event they hold. */
     fun stopBridge() {
         updateSettings { it.copy(bridgeSamsungId = null, bridgeGoogleId = null) }
-        _state.update { it.copy(bridgeLinkedGoogle = emptySet(), bridgeReport = null, occurrences = shownOf(it.allOccurrences, it.calendars, it.settings, emptySet())) }
+        _state.update { it.copy(bridgeLinkedGoogle = emptySet(), bridgeReport = null, occurrences = shownOccurrences(it.allOccurrences, it.calendars, it.settings, emptySet())) }
         scope.launch { bridge.forget() }
     }
 
@@ -427,7 +434,7 @@ class CalendarController(
                     it.copy(
                         rawCalendars = l.calendars, calendars = recolored(l.calendars, it.settings),
                         allOccurrences = l.occurrences, sync = l.sync, eventCounts = l.counts,
-                        occurrences = shownOf(l.occurrences, l.calendars, it.settings, it.bridgeLinkedGoogle),
+                        occurrences = shownOccurrences(l.occurrences, l.calendars, it.settings, it.bridgeLinkedGoogle),
                         loading = false, error = null, today = todayNow,
                     )
                 }
@@ -495,10 +502,12 @@ class CalendarController(
             else it.copy(
                 settings = next,
                 calendars = recolored(it.rawCalendars, next),
-                occurrences = shownOf(it.allOccurrences, it.calendars, next, it.bridgeLinkedGoogle),
+                occurrences = shownOccurrences(it.allOccurrences, it.calendars, next, it.bridgeLinkedGoogle),
             )
         }
         if (next.weekStart != before.weekStart) reload()
+        if (next.visibility != before.visibility || next.hues != before.hues || next.bridgeSamsungId != before.bridgeSamsungId ||
+            next.bridgeGoogleId != before.bridgeGoogleId || next.bridgeOn != before.bridgeOn) onChanged()
     }
 
     suspend fun load(id: String): StoredEvent? = store.event(id)
@@ -513,7 +522,7 @@ class CalendarController(
         val from = LocalDate(1900, 1, 1).atStartOfDayIn(zone)
         val to = todayNow.plus(DatePeriod(years = SEARCH_YEARS_AHEAD)).atStartOfDayIn(zone)
         val s = _state.value
-        return shownOf(store.search(query, from, to), s.calendars, s.settings, s.bridgeLinkedGoogle)
+        return shownOccurrences(store.search(query, from, to), s.calendars, s.settings, s.bridgeLinkedGoogle)
     }
 
     /**
@@ -549,6 +558,7 @@ class CalendarController(
             r.onFailure { e -> _state.update { it.copy(error = "저장하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
             done(r)
             reload()
+            onChanged()
         }
     }
 
@@ -557,6 +567,7 @@ class CalendarController(
             runCatching { store.delete(id) }
                 .onFailure { e -> _state.update { it.copy(error = "삭제하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
             reload()
+            onChanged()
         }
     }
 
@@ -623,6 +634,13 @@ class CalendarController(
 
     fun dismissError() = _state.update { it.copy(error = null) }
 
+    /** The occurrence of [eventId] that begins at [beginMillis] (a widget tap), or its nearest one that day. */
+    suspend fun findOccurrence(eventId: String, beginMillis: Long): Occurrence? {
+        val at = Instant.fromEpochMilliseconds(beginMillis)
+        val near = runCatching { store.occurrences(at.minus(1.days), at.plus(1.days)) }.getOrDefault(emptyList()).filter { it.eventId == eventId }
+        return near.firstOrNull { it.begin == at } ?: near.minByOrNull { (it.begin - at).absoluteValue }
+    }
+
     /** Nowhere to put a new event (every calendar read-only or hidden): say so instead of doing nothing. */
     fun noCalendar() = _state.update { it.copy(error = NO_CALENDAR) }
 
@@ -649,7 +667,6 @@ data class SyncRun(
 
 /** One reason events might not reach the other phone. */
 
-private fun AppSettings.hueOf(id: String): OloHue? = hues[id]?.let { n -> OloHue.entries.firstOrNull { it.name == n } }
 
 private fun recolored(calendars: List<CalendarInfo>, settings: AppSettings): List<CalendarInfo> =
     if (settings.hues.isEmpty()) calendars
@@ -657,17 +674,6 @@ private fun recolored(calendars: List<CalendarInfo>, settings: AppSettings): Lis
 
 /** How far ahead search follows a repeating event (docs/04 §검색). */
 const val SEARCH_YEARS_AHEAD = 5
-
-/** The occurrences OLO draws: hidden calendars out, OLO-chosen colours in. */
-private fun shownOf(all: List<Occurrence>, calendars: List<CalendarInfo>, settings: AppSettings, bridged: Set<String> = emptySet()): List<Occurrence> {
-    val hidden = calendars.filter { !settings.isShown(it) }.map { it.id }.toSet()
-    // A bridged pair is one event: show the Samsung copy, unless Samsung Calendar is hidden.
-    val samsungShown = settings.bridgeSamsungId?.let { id -> id !in hidden } == true
-    val twins = if (samsungShown) bridged else emptySet()
-    val shown = if (hidden.isEmpty() && twins.isEmpty()) all else all.filter { it.calendarId !in hidden && it.seriesId !in twins }
-    if (settings.hues.isEmpty()) return shown
-    return shown.map { o -> settings.hueOf(o.calendarId)?.let { o.copy(colorArgb = it.argb) } ?: o }
-}
 
 private class Loaded(
     val calendars: List<CalendarInfo>,

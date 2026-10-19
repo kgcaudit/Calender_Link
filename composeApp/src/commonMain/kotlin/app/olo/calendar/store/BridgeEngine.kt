@@ -452,3 +452,15 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         const val LEGACY_DAYS = 7L
     }
 }
+
+/**
+ * The widget's bridge line (docs/09 §4.6): null when not connected; else what to
+ * say and whether it needs the person (red dot, "확인 필요").
+ */
+fun bridgeStatusLine(connected: Boolean, report: BridgeReport?, googleSyncOff: Boolean, nowMillis: Long): Pair<String, Boolean>? = when {
+    !connected -> null
+    googleSyncOff -> "Google 동기화 꺼짐 · 확인 필요" to true
+    report == null -> "첫 ${Term.BRIDGE}을 기다리는 중" to false
+    report.failed > 0 || report.heldDeletes > 0 -> "${Term.BRIDGE} ${app.olo.calendar.model.agoText(report.atMillis, nowMillis)} · 확인 필요" to true
+    else -> "${Term.BRIDGE} ${app.olo.calendar.model.agoText(report.atMillis, nowMillis)} · 문제 없음" to false
+}

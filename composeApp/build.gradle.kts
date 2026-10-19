@@ -49,6 +49,7 @@ kotlin {
             implementation(libs.androidx.activity.compose)
             implementation(libs.kotlinx.coroutines.android)
             implementation(libs.androidx.work.runtime)
+            implementation(libs.androidx.glance.appwidget)
         }
     }
 }
@@ -61,8 +62,8 @@ android {
         applicationId = "app.olo.calendar"
         minSdk = 26
         targetSdk = 36
-        versionCode = 38
-        versionName = "0.11.0"
+        versionCode = 39
+        versionName = "0.12.0"
     }
 
     buildTypes {

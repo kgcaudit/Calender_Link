@@ -12,6 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import app.olo.calendar.model.loadSettings
 import app.olo.calendar.ui.App
+import app.olo.calendar.ui.OpenRequest
 import app.olo.calendar.ui.PermissionGate
 import app.olo.calendar.ui.SystemSettings
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +25,8 @@ class MainActivity : ComponentActivity(), PermissionGate, SystemSettings {
     override val granted: StateFlow<Boolean> = _granted
     override val deniedForGood: StateFlow<Boolean> = _deniedForGood
     private var asked = false
+    /** A widget tap waiting for the screen (docs/09 §6). */
+    private val openRequest = MutableStateFlow<OpenRequest?>(null)
 
     private val launcher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         refresh()
@@ -38,7 +41,31 @@ class MainActivity : ComponentActivity(), PermissionGate, SystemSettings {
         val store = AndroidCalendarStore(this)
         val prefs = AndroidPreferences(this)
         if (prefs.loadSettings().bridgeOn) BridgeScheduler.schedule(this)
-        setContent { App(store, this, this, use24Hour = android.text.format.DateFormat.is24HourFormat(this), prefs = prefs) }
+        openRequest.value = requestOf(intent)
+        setContent {
+            App(
+                store, this, this, use24Hour = android.text.format.DateFormat.is24HourFormat(this), prefs = prefs,
+                openRequest = openRequest, onOpened = { openRequest.value = null },
+                onChanged = { Widgets.refresh(this) },
+            )
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        requestOf(intent)?.let { openRequest.value = it }
+    }
+
+    private fun requestOf(i: Intent?): OpenRequest? {
+        if (i?.action != ACTION_OPEN) return null
+        val day = i.getLongExtra(EXTRA_DAY, Long.MIN_VALUE).takeIf { it != Long.MIN_VALUE }?.let { kotlinx.datetime.LocalDate.fromEpochDays(it.toInt()) }
+        return when (i.getStringExtra(EXTRA_KIND)) {
+            "day" -> day?.let { OpenRequest.Day(it) }
+            "new" -> day?.let { OpenRequest.NewEvent(it) }
+            "event" -> i.getStringExtra(EXTRA_EVENT)?.let { OpenRequest.Event(it, i.getLongExtra(EXTRA_BEGIN, 0L)) }
+            "bridge" -> OpenRequest.Bridge
+            else -> null
+        }
     }
 
     override fun onResume() {
@@ -105,5 +132,13 @@ class MainActivity : ComponentActivity(), PermissionGate, SystemSettings {
 
     override fun openSettings() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+    }
+
+    companion object {
+        const val ACTION_OPEN = "app.olo.calendar.OPEN"
+        const val EXTRA_KIND = "olo.kind"
+        const val EXTRA_DAY = "olo.day"
+        const val EXTRA_EVENT = "olo.event"
+        const val EXTRA_BEGIN = "olo.begin"
     }
 }

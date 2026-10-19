@@ -138,8 +138,7 @@ enum class MonthStage { FULL, LINES, WEEK }
 
 /** Holiday names for a day: the built-in Korean list plus any synced holiday calendar, without repeats. */
 internal fun holidayNames(day: LocalDate, occurrences: List<Occurrence>, holidayCalendars: Set<String>): List<String> =
-    (KoreanHolidays.on(day).map { it.name } + occurrences.on(day).filter { it.calendarId in holidayCalendars }.map { it.title })
-        .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    app.olo.calendar.model.holidayNamesOn(day, occurrences, holidayCalendars)
 
 /**
  * Whether a day is a holiday, for the red numbers of every cell. The days the

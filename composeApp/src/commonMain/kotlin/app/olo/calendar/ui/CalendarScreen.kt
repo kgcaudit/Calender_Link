@@ -114,6 +114,8 @@ fun CalendarScreen(
     startSearch: String? = null,
     startBridgeFor: String? = null,
     startSettings: Boolean = false,
+    request: OpenRequest? = null,
+    onRequestHandled: () -> Unit = {},
 ) {
     val state by controller.state.collectAsState()
     var sheet by remember { mutableStateOf<Sheet>(startBridgeFor?.let { Sheet.Bridge(it) } ?: if (startSettings) Sheet.Settings else Sheet.None) }
@@ -134,6 +136,21 @@ fun CalendarScreen(
     val openEditor = { d: LocalDate, t: LocalTime? ->
         controller.newDraft(d, t)?.let { sheet = Sheet.Editor(it, null) } ?: controller.noCalendar()
         Unit
+    }
+    // A widget tap: land on its day, event, new event or the bridge sheet.
+    LaunchedEffect(request) {
+        val r = request ?: return@LaunchedEffect
+        searchOpen = false
+        when (r) {
+            is OpenRequest.Day -> { sheet = Sheet.None; controller.open(r.date, if (state.view == ViewMode.YEAR) ViewMode.MONTH else state.view) }
+            is OpenRequest.NewEvent -> { controller.select(r.date); openEditor(r.date, null) }
+            is OpenRequest.Event -> controller.findOccurrence(r.eventId, r.beginMillis)?.let { o ->
+                controller.open(o.firstDay, if (state.view == ViewMode.YEAR) ViewMode.MONTH else state.view)
+                sheet = Sheet.Detail(o)
+            }
+            OpenRequest.Bridge -> state.settings.bridgeSamsungId?.let { sheet = Sheet.Bridge(it) }
+        }
+        onRequestHandled()
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
