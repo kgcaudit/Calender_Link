@@ -1,6 +1,8 @@
 package app.olo.calendar.ui
 
 import app.olo.calendar.design.OloMotion
+import app.olo.calendar.model.eulReul
+import app.olo.calendar.model.iGa
 import app.olo.calendar.design.OloTone
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.slideOutVertically
@@ -383,7 +385,7 @@ private fun TopBar(
 }
 
 /**
- * "2027년 01월" in one face, size and colour. A change of title is a horizontal
+ * "2027년 1월" in one face, size and colour. A change of title is a horizontal
  * card flip: the old face turns edge-on, the new one turns in from the other
  * side, in the direction the month pages moved.
  */
@@ -457,7 +459,7 @@ private fun QuickAddBar(day: LocalDate, controller: CalendarController, onOpenEd
         controller.quickAdd(t) { r ->
             r.onSuccess { (d, id) ->
                 val time = if (d.allDay) "종일" else clock(d.startTime, use24)
-                note = "‘${d.title}’ ${d.startDate.monthNumber}월 ${d.startDate.dayOfMonth}일 $time 추가됨" to id
+                note = "‘${d.title}’".eulReul() + " ${d.startDate.monthNumber}월 ${d.startDate.dayOfMonth}일 ${if (d.allDay) "종일 일정으로" else "${time}에"} 추가했습니다" to id
                 text = ""
                 focus.clearFocus()
             }
@@ -567,7 +569,7 @@ private fun SearchScreen(controller: CalendarController, initial: String, onClos
                 }
             }
             if (searched && hits.isEmpty()) {
-                Text("‘$query’ 일정이 없습니다.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp))
+                Text("‘$query’".iGa() + " 들어간 일정이 없습니다.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp))
             }
             // Each row's day, for the scroller's bubble (the summary row borrows the first day).
             val rowDays = remember(byDay) {
@@ -583,10 +585,10 @@ private fun SearchScreen(controller: CalendarController, initial: String, onClos
                     val past = hits.count { it.first.firstDay < today }
                     Text(
                         listOf(
-                            "${hits.size}건",
+                            "${hits.size}개",
                             if (years.first == years.second) "${years.first}년" else "${years.first}–${years.second}년",
-                            "지난 일정 $past",
-                            "다가올 일정 ${hits.size - past}",
+                            "지난 $past",
+                            "다가올 ${hits.size - past}",
                         ).joinToString(" · ") + if (busy) " · 찾는 중" else "",
                         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
@@ -596,7 +598,7 @@ private fun SearchScreen(controller: CalendarController, initial: String, onClos
                     item(key = "h" + d.toEpochDays()) {
                         val isToday = d == today
                         Text(
-                            "${d.year}. ${d.monthNumber}. ${d.dayOfMonth}. (${d.dayOfWeek.koShort()})" + if (isToday) "  오늘" else "",
+                            "${d.year}년 ${d.monthNumber}월 ${d.dayOfMonth}일 (${d.dayOfWeek.koShort()})" + if (isToday) " · 오늘" else "",
                             style = MaterialTheme.typography.labelLarge,
                             color = if (d < today) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f) else if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = if (isToday) FontWeight.SemiBold else null,
@@ -612,7 +614,7 @@ private fun SearchScreen(controller: CalendarController, initial: String, onClos
                             Column(Modifier.weight(1f)) {
                                 Text(o.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodyLarge)
                                 Text(
-                                    listOf(timeLabel(o, controller.zone, use24), o.location).filter { it.isNotBlank() }.joinToString("  ·  "),
+                                    listOf(timeLabel(o, controller.zone, use24), o.location).filter { it.isNotBlank() }.joinToString(" · "),
                                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -715,12 +717,12 @@ private fun calendarNav(
     onSyncExclude = { key, excluded ->
         controller.setSyncExcluded(key, excluded)
         val name = key.substringAfter('/')
-        onNote(SyncNote(if (excluded) "$name 지금 동기화에서 제외" else "$name 지금 동기화에 다시 포함") { controller.setSyncExcluded(key, !excluded); onNote(null) })
+        onNote(SyncNote(if (excluded) name.eulReul() + " 지금 동기화에서 제외했습니다" else name.eulReul() + " 지금 동기화에 다시 포함했습니다") { controller.setSyncExcluded(key, !excluded); onNote(null) })
     },
     onDisableSync = { account ->
         controller.setAccountSync(account, false) { ok ->
             if (ok) onNote(SyncNote("$account 캘린더 동기화를 껐습니다") { controller.setAccountSync(account, true); onNote(null) })
-            else { onNote(SyncNote("휴대폰이 허용하지 않아 이 계정의 동기화 설정을 엽니다", null)); settings?.openAccountSync(account) }
+            else { onNote(SyncNote("휴대폰에서 바꿀 수 없어 이 계정의 동기화 설정을 엽니다", null)); settings?.openAccountSync(account) }
         }
     },
     onMove = onMove,
@@ -750,7 +752,7 @@ private fun enableSync(
             if (ok) {
                 onNote(SyncNote("$account 캘린더 동기화를 켰습니다") { controller.setAccountSync(account, false); onNote(null) })
             } else {
-                onNote(SyncNote("휴대폰이 허용하지 않아 이 계정의 동기화 설정을 엽니다", null))
+                onNote(SyncNote("휴대폰에서 바꿀 수 없어 이 계정의 동기화 설정을 엽니다", null))
                 settings?.openAccountSync(account)
             }
         }

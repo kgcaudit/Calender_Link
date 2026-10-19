@@ -41,6 +41,7 @@ import app.olo.calendar.design.calendarColor
 import app.olo.calendar.design.status
 import app.olo.calendar.model.AppSettings
 import app.olo.calendar.model.CalendarInfo
+import app.olo.calendar.model.Term
 import kotlinx.datetime.DayOfWeek
 import app.olo.calendar.model.MovePlan
 import app.olo.calendar.model.MoveResult
@@ -93,6 +94,8 @@ fun EventDetailSheet(
     var confirmDelete by remember { mutableStateOf(false) }
     LaunchedEffect(occurrence.eventId) { stored = controller.load(occurrence.eventId) }
     val cal = calendars[occurrence.calendarId]
+    // A bridged event's deletion carries to the other side and on to the iPhone: say so before it happens.
+    val bridged = controller.state.value.settings.let { it.bridgeOn && (occurrence.calendarId == it.bridgeSamsungId || occurrence.calendarId == it.bridgeGoogleId) }
 
     OloSheet(onDismiss) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -113,7 +116,7 @@ fun EventDetailSheet(
             if (d.location.isNotBlank()) DetailLine("장소", d.location)
             when {
                 d.recurrence != null -> DetailLine("반복", d.recurrence.describeKo(d.startDate))
-                s.rawRule != null -> DetailLine("반복", "복잡한 반복 규칙 (OLO에서는 그대로 둡니다)")
+                s.rawRule != null -> DetailLine("반복", "다른 앱에서 만든 규칙(그대로 유지)")
             }
             if (d.reminderMinutes.isNotEmpty()) DetailLine("알림", d.reminderMinutes.sorted().joinToString { reminderLabel(it) })
             if (d.description.isNotBlank()) DetailLine("메모", d.description)
@@ -123,7 +126,8 @@ fun EventDetailSheet(
         if (s != null && s.calendarWritable) {
             if (confirmDelete) {
                 Text(
-                    if (s.rawRule != null || occurrence.recurring) "반복 일정 전체가 삭제됩니다. 삭제할까요?" else "이 일정을 삭제할까요?",
+                    (if (s.rawRule != null || occurrence.recurring) "반복 일정 전체를 삭제할까요?" else "이 일정을 삭제할까요?") +
+                        (if (bridged) " ${Term.GOOGLE_MAIN}와 아이폰에서도 삭제됩니다." else ""),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
@@ -137,7 +141,7 @@ fun EventDetailSheet(
                 }
             }
         } else if (s != null) {
-            Text("읽기 전용 캘린더입니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("읽기 전용 캘린더라 수정할 수 없습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -169,7 +173,7 @@ fun CalendarsSheet(
             OloTextButton("동기화 상태", onOpenSync)
         }
         Text(
-            "표시 여부는 OLO에만 적용됩니다. 삼성·Google 캘린더 앱의 설정은 바뀌지 않습니다. 길게 누르면 '이것만 보기'.",
+            "표시 켜고 끄기는 OLO에만 적용됩니다. 길게 누르면 ‘이것만 보기’.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -209,7 +213,7 @@ fun SyncSheet(
                     st.failed,
                     "Google 계정의 캘린더 동기화가 꺼져 있습니다",
                     sync.accountsWithSyncOff.joinToString("\n") +
-                        "\n설정 › 계정 및 백업 › 계정 관리 › (계정) › 계정 동기화 › 캘린더를 켜 주세요.",
+                        "\n설정 > 계정 및 백업 > 계정 관리 > (계정) > 계정 동기화에서 캘린더를 켜 주세요.",
                 ) {
                     onOpenSyncSettings?.let { OloOutlinedButton("계정 동기화 설정 열기", it) }
                 }
@@ -219,18 +223,18 @@ fun SyncSheet(
                 Issue(
                     st.failed,
                     "${cal.name}: 일정 ${n}개가 Google 밖에 있습니다",
-                    "${cal.kind.koLabel()} 캘린더라 아이폰 등 다른 기기에 나타나지 않습니다. Google 캘린더로 옮기면 함께 보입니다.",
+                    "이 기기에만 저장되어 아이폰 등 다른 기기에는 보이지 않습니다. Google 캘린더로 옮기면 함께 보입니다.",
                 ) {
                     if (state.googleTargets.isNotEmpty()) OloButton("Google로 옮기기", { onMove(cal.id) })
                     else Text("옮길 Google 캘린더가 없습니다. 먼저 Google 계정의 캘린더 동기화를 켜 주세요.", style = MaterialTheme.typography.bodySmall)
                 }
             }
             if (sync.pendingUploads > 0) {
-                Issue(st.waiting, "Google로 올라가기를 기다리는 변경 ${sync.pendingUploads}건", "보통 몇 분 안에 올라갑니다.") {
+                Issue(st.waiting, "Google 업로드 대기 ${sync.pendingUploads}건", "보통 몇 분 안에 끝납니다.") {
                     OloTextButton("지금 동기화", onSyncNow)
                 }
             } else if (!anyIssue) {
-                Issue(st.done, "Google과 동기화된 상태입니다", "이 휴대폰의 일정은 Google 캘린더를 거쳐 다른 기기로 갑니다.") {
+                Issue(st.done, "Google과 동기화되어 있습니다", "다른 기기에도 같은 일정이 보입니다.") {
                     OloTextButton("지금 동기화", onSyncNow)
                 }
             }
@@ -300,13 +304,12 @@ fun MoveSheet(
                         }
                     }
                     val notes = buildList {
-                        add("옮긴 뒤 ${from.name}의 원본은 삭제됩니다. 모두 옮겨진 경우에만 지웁니다.")
-                        add("반복 규칙과 알림은 그대로 옮겨집니다.")
-                        if (p.changedOccurrences > 0) add("반복 중 따로 바꾼 일정 ${p.changedOccurrences}개는 각각 별도 일정으로 옮겨집니다.")
-                        if (p.withGuests > 0) add("참석자가 있는 일정 ${p.withGuests}개는 참석자 없이 옮깁니다. 초대 메일이 다시 나가지 않게 하기 위해서입니다.")
-                        add("삼성 전용 정보(스티커, 음력 반복 등)는 옮겨지지 않습니다.")
+                        add("모두 옮긴 뒤에만 ${from.name}의 원본을 삭제합니다.")
+                        add("반복 규칙과 알림은 그대로 옮깁니다. 스티커·음력 반복 같은 삼성 전용 정보는 옮기지 않습니다.")
+                        if (p.changedOccurrences > 0) add("반복 중 따로 바꾼 일정 ${p.changedOccurrences}개는 각각 별도 일정이 됩니다.")
+                        if (p.withGuests > 0) add("참석자가 있는 일정 ${p.withGuests}개는 초대 메일이 다시 나가지 않게 참석자 없이 옮깁니다.")
                         if (target != null && target!!.accountName in accountsWithSyncOff) {
-                            add("이 Google 계정은 캘린더 동기화가 꺼져 있습니다. 옮긴 일정은 동기화를 켜야 Google로 올라갑니다.")
+                            add("이 Google 계정은 캘린더 동기화가 꺼져 있어, 켜야 Google에 반영됩니다.")
                         }
                     }
                     notes.forEach { Text("· $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -333,7 +336,7 @@ fun MoveSheet(
                 is MoveStep.Done -> {
                     val r = s.result
                     Text(
-                        "${r.moved}개를 옮겼습니다." + if (r.deleted > 0) " 원본 ${r.deleted}개를 삭제했습니다." else "",
+                        "일정 ${r.moved}개를 옮겼습니다." + if (r.deleted > 0) " 원본은 삭제했습니다." else "",
                         style = MaterialTheme.typography.bodyLarge,
                     )
                     if (r.failed > 0) Text("옮기지 못한 일정 ${r.failed}개", color = MaterialTheme.colorScheme.error)
@@ -355,7 +358,7 @@ fun SettingsSheet(
     state: CalendarUiState,
     onChange: ((AppSettings) -> AppSettings) -> Unit,
     onDismiss: () -> Unit,
-    /** Lets OLO see an account ("확인 필요"), then turns its sync on. */
+    /** Lets OLO see an account ("허용 필요"), then turns its sync on. */
     /** Allows an account OLO cannot see yet; the callback says whether the person did. */
     onAllow: (String, (Boolean) -> Unit) -> Unit = { _, done -> done(false) },
 ) {
@@ -375,7 +378,7 @@ fun SettingsSheet(
                 ) { d -> onChange { it.copy(weekStart = d) } }
             }
             SettingSwitch("음력", "일요일 · 음력 1일·15일", st.showLunar) { v -> onChange { it.copy(showLunar = v) } }
-            SettingSwitch("주 번호", "월 보기 왼쪽 · ISO", st.showWeekNumbers) { v -> onChange { it.copy(showWeekNumbers = v) } }
+            SettingSwitch("주 번호", "월 보기 왼쪽에 표시", st.showWeekNumbers) { v -> onChange { it.copy(showWeekNumbers = v) } }
             SettingSwitch("달을 위아래로 넘기기", "폴드를 펼쳤을 때만", st.verticalPagingWide) { v -> onChange { it.copy(verticalPagingWide = v) } }
 
             SettingGroup("새 일정")
@@ -391,14 +394,14 @@ fun SettingsSheet(
             SettingGroup("동기화")
             val accounts = syncAccounts(state.calendars)
             val included = accounts.count { it.syncKey !in st.syncExcluded && it.accountName !in state.sync.accountsWithSyncOff }
-            SettingRow("지금 동기화 대상", summary = "${accounts.size}개 계정 중 ${included}개", onClick = { choosingSync = true }) {
+            SettingRow("지금 동기화 대상", summary = "계정 ${accounts.size}개 중 ${included}개", onClick = { choosingSync = true }) {
                 Icon(OloIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
             }
 
             SettingGroup("정보")
             SettingRow("시간 형식", summary = "휴대폰 설정(12/24시간)을 따름")
-            SettingRow("알림", summary = "휴대폰·Google 캘린더 알림을 그대로 씀")
-            SettingRow("개인정보", summary = "일정은 휴대폰 캘린더에만 저장, 서버 전송 없음")
+            SettingRow("알림", summary = "휴대폰과 Google 캘린더 알림을 그대로 사용")
+            SettingRow("개인정보", summary = "일정은 휴대폰 캘린더에만 저장 · 서버로 보내지 않음")
         }
     }
 
@@ -452,8 +455,8 @@ private fun SyncTargets(state: CalendarUiState, onChange: ((AppSettings) -> AppS
                 Text(c.accountName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val note = when {
                     off -> "휴대폰에서 동기화 꺼짐 · 자동으로 제외"
-                    isMain && !on -> "구글 메인 계정 · 아이폰 반영이 늦어질 수 있음"
-                    isMain -> "${c.kind.koLabel()} · 구글 메인 계정"
+                    isMain && !on -> "${Term.GOOGLE_MAIN_ACCOUNT} · 빼면 아이폰 반영이 늦어질 수 있음"
+                    isMain -> "${c.kind.koLabel()} · ${Term.GOOGLE_MAIN_ACCOUNT}"
                     else -> c.kind.koLabel()
                 }
                 Text(note, style = MaterialTheme.typography.labelSmall, color = if (isMain && !on) cs.error else cs.onSurfaceVariant)
@@ -529,7 +532,7 @@ private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSetting
     val general = writable.filter { it.id !in linkedIds }
     var ask by remember { mutableStateOf<CalendarInfo?>(null) }
 
-    Text("새로 만든 일정이 저장될 곳 · 편집 화면에서 일정마다 바꿀 수 있음", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+    Text("새 일정이 저장될 캘린더 · 일정마다 바꿀 수 있음", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
     val pickAuto = { onChange { it.copy(defaultCalendarId = null) }; onPicked() }
     Row(Modifier.fillMaxWidth().clickable(onClick = pickAuto), verticalAlignment = Alignment.CenterVertically) {
         RadioButton(selected = chosen == null, onClick = pickAuto)
@@ -562,8 +565,8 @@ private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSetting
                         style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
                     )
                     when {
-                        blocked -> Text("확인 필요 · 고르면 먼저 허용합니다", style = MaterialTheme.typography.labelSmall, color = cs.error)
-                        c.kind == SyncKind.DEVICE -> Text("다른 기기에 안 보임", style = MaterialTheme.typography.labelSmall, color = cs.error)
+                        blocked -> Text("${Term.NEEDS_ACCESS} · 고르면 허용 화면이 열립니다", style = MaterialTheme.typography.labelSmall, color = cs.error)
+                        c.kind == SyncKind.DEVICE -> Text("이 기기에만 저장", style = MaterialTheme.typography.labelSmall, color = cs.error)
                     }
                 }
             }
@@ -577,7 +580,7 @@ private fun DefaultCalendarPicker(state: CalendarUiState, onChange: ((AppSetting
             onDismissRequest = { ask = null },
             shape = MaterialTheme.shapes.extraLarge,
             title = { Text("계정 허용이 필요합니다") },
-            text = { Text("${c.accountName}은 OLO가 아직 동기화 상태를 확인하지 못한 계정입니다. 계정 선택 화면에서 한 번 허용하면 기본 캘린더로 쓰고 동기화도 켭니다.") },
+            text = { Text("${c.accountName} 계정을 쓰려면 계정 선택 화면에서 한 번 허용해야 합니다. 허용하면 기본 캘린더로 정하고 동기화를 켭니다.") },
             confirmButton = {
                 OloTextButton("허용하고 고르기", onClick = {
                     // The default moves only once the account is allowed; cancelled, it stays as it was.

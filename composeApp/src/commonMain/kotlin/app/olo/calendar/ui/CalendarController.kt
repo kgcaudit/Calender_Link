@@ -117,7 +117,7 @@ data class CalendarUiState(
      */
     val syncExcludedCount: Int get() = syncAccounts(calendars).count { it.syncKey in settings.syncExcluded }
 
-    /** "확인 필요" accounts still asked (excluded ones are left alone on purpose). */
+    /** "허용 필요" accounts still asked (excluded ones are left alone on purpose). */
     val syncUnreachable: Int
         get() = syncAccounts(calendars).count { it.accountName in sync.accountsNeedingAccess && it.syncKey !in settings.syncExcluded }
 
@@ -203,7 +203,7 @@ class CalendarController(
         scope.launch {
             // While OLO is open the bridge follows every change within seconds; the
             // platform's background work covers the rest. Its own writes settle in one pass.
-            store.changes().debounce(3_000).collect { if (_state.value.settings.bridgeOn) runBridge(trigger = "앱 · 변경 감지") }
+            store.changes().debounce(3_000).collect { if (_state.value.settings.bridgeOn) runBridge(trigger = "변경 감지") }
         }
         if (_state.value.settings.bridgeOn) runBridge(trigger = "앱 열 때")
     }
@@ -546,7 +546,7 @@ class CalendarController(
                 if (oldId != null && draft.calendarId == _state.value.settings.bridgeSamsungId) bridge.saveBridged({ store.save(draft) }, oldId)
                 else store.save(draft)
             }
-            r.onFailure { e -> _state.update { it.copy(error = "저장하지 못했습니다: ${e.message}") } }
+            r.onFailure { e -> _state.update { it.copy(error = "저장하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
             done(r)
             reload()
         }
@@ -555,7 +555,7 @@ class CalendarController(
     fun delete(id: String) {
         scope.launch {
             runCatching { store.delete(id) }
-                .onFailure { e -> _state.update { it.copy(error = "삭제하지 못했습니다: ${e.message}") } }
+                .onFailure { e -> _state.update { it.copy(error = "삭제하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
             reload()
         }
     }

@@ -13,7 +13,7 @@ package app.olo.calendar.model
  */
 enum class CalendarCategory(val label: String) {
     DEVICE("내 기기"),
-    SAMSUNG("Samsung"),
+    SAMSUNG("삼성"),
     GOOGLE("Google"),
     OTHER("기타"),
 }
@@ -23,8 +23,8 @@ enum class AccountStatus(val label: String) {
     SYNCING("동기화 중"),
     SYNC_OFF("동기화 꺼짐"),
     /** OLO has not been allowed to see this account yet, so its sync state is unknown. */
-    NEEDS_ACCESS("확인 필요"),
-    DEVICE_ONLY("이 기기만"),
+    NEEDS_ACCESS(Term.NEEDS_ACCESS),
+    DEVICE_ONLY("이 기기에만"),
     /** Left out of "지금 동기화" by the person; the phone's automatic sync goes on. */
     EXCLUDED("제외됨"),
     READ_ONLY("읽기 전용"),
@@ -91,13 +91,13 @@ fun accountTitle(c: CalendarInfo): String = when (c.accountName) {
     SAMSUNG_HOLIDAY_ACCOUNT -> "공휴일·기념일"
     SAMSUNG_BIRTHDAY_ACCOUNT -> "연락처"
     else -> when (c.kind) {
-        SyncKind.DEVICE -> "이 기기"
+        SyncKind.DEVICE -> "이 휴대폰"
         else -> c.accountName
     }
 }
 
 private fun kindTitle(c: CalendarInfo): String = when {
-    c.accountName == SAMSUNG_HOLIDAY_ACCOUNT || c.accountName == SAMSUNG_BIRTHDAY_ACCOUNT -> "Samsung"
+    c.accountName == SAMSUNG_HOLIDAY_ACCOUNT || c.accountName == SAMSUNG_BIRTHDAY_ACCOUNT -> "삼성"
     else -> when (c.kind) {
         SyncKind.GOOGLE -> "Google"
         SyncKind.DEVICE -> "휴대폰"

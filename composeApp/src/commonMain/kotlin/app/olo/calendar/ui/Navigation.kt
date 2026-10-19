@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.olo.calendar.design.OloIcons
 import app.olo.calendar.design.OloLayout
+import app.olo.calendar.model.Term
 import app.olo.calendar.design.OloMotion
 import app.olo.calendar.design.calendarColor
 import app.olo.calendar.model.AccountGroup
@@ -395,17 +396,17 @@ private fun SamsungHome(samsung: CalendarInfo, nav: NavActions, shown: (String) 
             Column(Modifier.weight(1f)) {
                 Text(samsung.name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    listOfNotNull("삼성 계정", "일정 $n".takeIf { n > 0 }).joinToString(" · "),
+                    listOfNotNull("삼성 계정", "일정 ${n}개".takeIf { n > 0 }).joinToString(" · "),
                     fontSize = 11.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                     Box(Modifier.size(6.dp).background(OloTone.accent, CircleShape))
                     Spacer(Modifier.width(4.dp))
-                    Text("구글 메인과 연결 안 됨", fontSize = 11.sp, color = OloTone.accent, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Text("${Term.GOOGLE_MAIN}와 연결되지 않음", fontSize = 11.sp, color = OloTone.accent, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }
             }
             Text("연결", style = MaterialTheme.typography.labelLarge, color = OloTone.accent, fontWeight = FontWeight.SemiBold)
-            Icon(OloIcons.ChevronRight, contentDescription = "구글 메인과 연결", tint = OloTone.accent, modifier = Modifier.size(18.dp))
+            Icon(OloIcons.ChevronRight, contentDescription = "${Term.GOOGLE_MAIN}와 연결", tint = OloTone.accent, modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -448,19 +449,19 @@ private fun MainSection(samsung: CalendarInfo, google: CalendarInfo, rest: List<
                     Text(google.accountName, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                         val (label, color) = when {
-                            s.bridgeProgress != null -> "맞추는 중" to green
-                            s.bridgeError != null -> "맞춤 실패" to cs.error
-                            s.bridgeStaleFor != null -> "자동 맞춤 멈춰 있었음" to cs.error
+                            s.bridgeProgress != null -> "${Term.BRIDGE} 중" to green
+                            s.bridgeError != null -> "${Term.BRIDGE} 실패" to cs.error
+                            s.bridgeStaleFor != null -> "자동 ${Term.BRIDGE}이 멈췄었음" to cs.error
                             s.bridgeDuplicates > 0 -> "중복 ${s.bridgeDuplicates}개" to cs.error
                             issue -> "확인 필요" to cs.error
                             // The same account the Google group's card excludes: shown here too.
-                            google.syncKey in s.settings.syncExcluded -> "연결됨 · 구글 메인 지금 동기화 제외" to cs.error
+                            google.syncKey in s.settings.syncExcluded -> "연결됨 · 지금 동기화에서 제외 중" to cs.error
                             else -> "연결됨" to green
                         }
                         Box(Modifier.size(6.dp).background(color, CircleShape))
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            listOfNotNull(label, "일정 $n".takeIf { n > 0 }, s.bridgeReport?.let { "맞춤 ${agoKo(it.atMillis)}" }).joinToString(" · "),
+                            listOfNotNull(label, "일정 ${n}개".takeIf { n > 0 }, s.bridgeReport?.let { "${agoKo(it.atMillis)} ${Term.BRIDGE}" }).joinToString(" · "),
                             fontSize = 11.sp, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                     }
@@ -510,18 +511,33 @@ private fun AccountTile(c: CalendarInfo) {
         }
     }
     val letter = when {
-        c.isHoliday -> "휴"
+        c.isHoliday -> "휴일"
         else -> when (c.kind) {
             SyncKind.GOOGLE -> "G"
             SyncKind.SAMSUNG -> "S"
             SyncKind.EXCHANGE -> "E"
             SyncKind.ICLOUD -> "i"
-            SyncKind.DEVICE -> "폰"
+            SyncKind.DEVICE -> "기기"
             else -> "·"
         }
     }
-    Box(Modifier.size(28.dp).background(hue, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
-        Text(letter, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = OloTone.onSolid(hue))
+    // Read aloud as what the letters stand for.
+    val spoken = when {
+        c.isHoliday -> "공휴일 캘린더"
+        else -> when (c.kind) {
+            SyncKind.GOOGLE -> "Google 캘린더"
+            SyncKind.SAMSUNG -> "삼성 계정 캘린더"
+            SyncKind.EXCHANGE -> "Exchange 캘린더"
+            SyncKind.ICLOUD -> "iCloud 캘린더"
+            SyncKind.DEVICE -> "이 기기에만 저장되는 캘린더"
+            else -> "기타 캘린더"
+        }
+    }
+    Box(
+        Modifier.size(28.dp).background(hue, RoundedCornerShape(8.dp)).semantics { contentDescription = spoken },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(letter, fontSize = if (letter.length > 1) 9.sp else 12.sp, fontWeight = FontWeight.Bold, color = OloTone.onSolid(hue), maxLines = 1)
     }
 }
 
@@ -542,10 +558,10 @@ private fun AccountCard(account: AccountGroup, nav: NavActions, shown: (String) 
             val bridgedNow = c.id == nav.state.settings.bridgeSamsungId
             val sub = listOfNotNull(
                 account.subtitle.takeIf { !bridgedNow },
-                account.title.takeIf { it != c.name && !bridgedNow },
-                n.takeIf { it > 0 }?.let { "일정 $it" },
-                nav.state.bridgeReport?.takeIf { bridgedNow }?.let { "맞춤 ${agoKo(it.atMillis)}" },
-                nav.state.bridgeProgress?.takeIf { bridgedNow }?.let { (d, t) -> "맞추는 중 $d/$t" },
+                account.title.takeIf { it != c.name && !bridgedNow && c.kind != SyncKind.DEVICE },
+                n.takeIf { it > 0 }?.let { "일정 ${it}개" },
+                nav.state.bridgeReport?.takeIf { bridgedNow }?.let { "${agoKo(it.atMillis)} ${Term.BRIDGE}" },
+                nav.state.bridgeProgress?.takeIf { bridgedNow }?.let { (d, t) -> "${Term.BRIDGE} 중 $d/$t" },
             ).joinToString(" · ")
             CalendarLine(c, nav, shown(c.id), title = c.name, subtitle = sub, status = { SyncChip(account, nav) }, trailing = {}, lead = 6.dp)
         } else {
@@ -584,8 +600,8 @@ private fun AccountCard(account: AccountGroup, nav: NavActions, shown: (String) 
                             val first = account.calendars.first()
                             val isMain = nav.state.bridgeGoogle?.let { it.accountName == first.accountName && it.accountType == first.accountType } == true
                             Text(
-                                if (isMain) "구글 메인 · 연동 외 ${account.calendars.size}개" else "${account.subtitle} · ${account.calendars.size}개",
-                                style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1,
+                                if (isMain) "메인 계정 · ${account.calendars.size}개" else "${account.subtitle} · ${account.calendars.size}개",
+                                style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -650,8 +666,8 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
                     DropdownMenuItem(
                         text = {
                             Column {
-                                Text("휴대폰 동기화 끄기")
-                                Text("계정 전체 · Samsung·Google 캘린더 앱에도 적용", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                                Text("이 계정 동기화 끄기")
+                                Text("삼성 캘린더·Google 캘린더 앱에도 적용됩니다", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                             }
                         },
                         leadingIcon = { Icon(OloIcons.Warning, contentDescription = null) },
@@ -667,7 +683,7 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
                 Chip("제외됨", cs.onSurfaceVariant, cs.surfaceContainerHighest, OloIcons.ChevronDown) { menu = true }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     Text(
-                        "지금 동기화가 이 계정을 건너뜁니다.\n휴대폰의 자동 동기화는 그대로입니다.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                        "지금 동기화에서 제외된 계정입니다.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                     )
                     ExcludeItem(account, nav, excluded = true) { menu = false }
@@ -678,10 +694,10 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
         AccountStatus.NEEDS_ACCESS -> {
             var menu by remember { mutableStateOf(false) }
             Box {
-                Chip("확인 필요", cs.onSecondaryContainer, cs.secondaryContainer, OloIcons.ChevronDown) { menu = true }
+                Chip(Term.NEEDS_ACCESS, cs.onSecondaryContainer, cs.secondaryContainer, OloIcons.ChevronDown) { menu = true }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     Text(
-                        "OLO가 이 계정의 동기화를 보고 켜려면\n계정 선택 화면에서 한 번 허용해야 합니다", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                        "계정 선택 화면에서 한 번 허용하면\n동기화 상태를 보고 켤 수 있습니다", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                     )
                     DropdownMenuItem(
@@ -721,11 +737,11 @@ private fun SyncChip(account: AccountGroup, nav: NavActions) {
             val samsung = account.calendars.firstOrNull { it.kind == SyncKind.SAMSUNG && it.writable }
             when {
                 // Joined to the Google main calendar (docs/07): green, like a syncing account.
-                bridged != null -> Chip("구글 메인 연결", if (dark) Color(0xFF8FD1AE) else Color(0xFF2F6B4F), Color.Transparent, OloIcons.ChevronRight) { nav.onMove(bridged.id) }
-                samsung != null -> Chip("구글 메인과 연결", cs.onPrimaryContainer, OloTone.container, OloIcons.ChevronRight) { nav.onMove(samsung.id) }
+                bridged != null -> Chip("${Term.BRIDGE} 중", if (dark) Color(0xFF8FD1AE) else Color(0xFF2F6B4F), Color.Transparent, OloIcons.ChevronRight) { nav.onMove(bridged.id) }
+                samsung != null -> Chip("Google 연결", cs.onPrimaryContainer, OloTone.container, OloIcons.ChevronRight) { nav.onMove(samsung.id) }
                 else -> {
                     val strandedId = account.calendars.firstOrNull { c -> nav.state.stranded.any { it.first.id == c.id } }?.id
-                    Chip("이 기기만", cs.onSurfaceVariant, cs.surfaceContainerHighest, if (strandedId != null) OloIcons.ChevronRight else null,
+                    Chip("이 기기에만", cs.onSurfaceVariant, cs.surfaceContainerHighest, if (strandedId != null) OloIcons.ChevronRight else null,
                         onClick = strandedId?.let { id -> { nav.onMove(id) } })
                 }
             }
@@ -752,8 +768,8 @@ private fun ExcludeItem(account: AccountGroup, nav: NavActions, excluded: Boolea
                 val all = nav.state.calendars.count { it.syncKey == first.syncKey }
                 val note = when {
                     excluded -> null
-                    isMain -> "계정 전체 ${all}개 캘린더 · 연동 캘린더 포함 · 아이폰 반영이 늦어질 수 있음"
-                    else -> "계정 전체 ${all}개 캘린더 · OLO만, 휴대폰 자동 동기화는 그대로"
+                    isMain -> "이 계정의 캘린더 ${all}개 · 빼면 아이폰 반영이 늦어질 수 있음"
+                    else -> "이 계정의 캘린더 ${all}개 · OLO의 지금 동기화에만 적용"
                 }
                 if (note != null) Text(note, style = MaterialTheme.typography.labelSmall, color = if (isMain) cs.error else cs.onSurfaceVariant)
             }
@@ -831,8 +847,8 @@ private fun CalendarLine(
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("이것만 보기") }, onClick = { menu = false; nav.onShowOnly(c.id) })
-            DropdownMenuItem(text = { Text("처음 설정으로 모두 보기") }, onClick = { menu = false; nav.onShowDefault() })
-            Text("OLO에서 쓸 색", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 14.dp, top = 8.dp, bottom = 4.dp))
+            DropdownMenuItem(text = { Text("모두 보기(처음 설정)") }, onClick = { menu = false; nav.onShowDefault() })
+            Text("OLO 표시 색", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 14.dp, top = 8.dp, bottom = 4.dp))
             HueSwatches(selected = nav.state.settings.hues[c.id]) { h -> menu = false; nav.onHue(c.id, h) }
         }
     }
@@ -921,25 +937,25 @@ private fun SyncNowRow(state: CalendarUiState, onClick: () -> Unit) {
             Text(if (running) "동기화 중…" else "지금 동기화", style = MaterialTheme.typography.bodyLarge)
             val line = when {
                 run == null -> null
-                running -> "계정마다 휴대폰에 동기화를 요청했습니다"
+                running -> "동기화를 요청했습니다"
                 else -> listOfNotNull(
                     run.atMillis?.let { "${agoKo(it)} 동기화" },
                     when {
                         run.added > 0 -> "새 일정 ${run.added}개"
-                        run.removed > 0 -> "일정 ${run.removed}개 줄어듦"
+                        run.removed > 0 -> "일정 ${run.removed}개 삭제됨"
                         else -> "바뀐 일정 없음"
                     },
-                    run.matched?.takeIf { it > 0 }?.let { "맞춤 ${it}개" },
+                    run.matched?.takeIf { it > 0 }?.let { "${Term.BRIDGE} ${it}개" },
                 ).joinToString(" · ")
             }
             // Counts read live: excluding an account after the run updates the line at once.
             val excluded = state.syncExcludedCount
             val unreachable = state.syncUnreachable
-            val full = listOfNotNull(line, excluded.takeIf { it > 0 && !running }?.let { "${it}개 계정 제외" }).joinToString(" · ").ifEmpty { null }
+            val full = listOfNotNull(line, excluded.takeIf { it > 0 && !running }?.let { "계정 ${it}개 제외" }).joinToString(" · ").ifEmpty { null }
             if (full != null) Text(full, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
             if (run != null && !running && unreachable > 0) {
                 Text(
-                    "${unreachable}개 계정은 확인 필요 · 계정의 ‘확인 필요’를 눌러 허용하세요",
+                    "계정 ${unreachable}개 ${Term.NEEDS_ACCESS} · 계정의 ‘${Term.NEEDS_ACCESS}’을 눌러 허용하세요",
                     style = MaterialTheme.typography.labelSmall, color = cs.error,
                 )
             }

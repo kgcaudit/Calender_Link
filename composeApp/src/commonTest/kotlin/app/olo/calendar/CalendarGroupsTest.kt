@@ -79,7 +79,7 @@ class CalendarGroupsTest {
         assertEquals(AccountStatus.SYNCING, google.first { it.title == "hazakuqa@gmail.com" }.status)
         val samsung = tree.first { it.category == CalendarCategory.SAMSUNG }.accounts
         assertEquals(AccountStatus.DEVICE_ONLY, samsung.first { it.calendars.any { c -> c.id == "16" } }.status)
-        assertEquals(listOf("이 기기", "공휴일·기념일", "연락처"), tree.first { it.category == CalendarCategory.DEVICE }.accounts.map { it.title }.sortedBy { listOf("이 기기", "공휴일·기념일", "연락처").indexOf(it) })
+        assertEquals(listOf("이 휴대폰", "공휴일·기념일", "연락처"), tree.first { it.category == CalendarCategory.DEVICE }.accounts.map { it.title }.sortedBy { listOf("이 휴대폰", "공휴일·기념일", "연락처").indexOf(it) })
     }
 
     @Test

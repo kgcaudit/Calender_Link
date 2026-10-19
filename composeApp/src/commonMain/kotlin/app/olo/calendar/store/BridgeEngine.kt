@@ -1,5 +1,6 @@
 package app.olo.calendar.store
 
+import app.olo.calendar.model.Term
 import app.olo.calendar.model.BridgeFields
 import app.olo.calendar.model.LogDir
 import app.olo.calendar.model.LogEntry
@@ -28,7 +29,7 @@ import kotlinx.datetime.Clock
 /** Which two calendars the bridge joins. */
 data class BridgeConfig(val samsungCalendarId: String, val googleCalendarId: String)
 
-/** The outcome of one pass, kept for the drawer ("마지막 맞춤 2분 전"). */
+/** The outcome of one pass, kept for the drawer ("마지막 연동 2분 전"). */
 data class BridgeReport(
     val atMillis: Long,
     val toGoogle: Int,
@@ -101,7 +102,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val keepS = pending.filterIsInstance<BridgeOp.DeleteSamsung>().map { it.samsungId }.toSet()
         val keepG = pending.filterIsInstance<BridgeOp.DeleteGoogle>().map { it.googleId }.toSet()
         links = links.filterNot { it.samsungId in keepS || it.googleId in keepG }
-        runLocked(config, allowMassDelete = false, { _, _ -> }, "되살리기(한쪽만 사라짐)")
+        runLocked(config, allowMassDelete = false, { _, _ -> }, "${Term.RESTORE}(한쪽만 사라짐)")
     }
 
     /**
@@ -137,8 +138,8 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val items = recoverable(config)
         val back = items.filter { store.bridgeRestore(it.id, config.samsungCalendarId) != null }
         val n = back.size
-        if (back.isNotEmpty()) record(LogEntry(Clock.System.now().toEpochMilliseconds(), "되살리기", back.map { LogItem(LogDir.TO_SAMSUNG, "되살림", it.fields, "지워진 기록에서 Samsung으로") }))
-        if (connected) runLocked(config, allowMassDelete = false, { _, _ -> }, "되살린 뒤 맞춤")
+        if (back.isNotEmpty()) record(LogEntry(Clock.System.now().toEpochMilliseconds(), Term.RESTORE, back.map { LogItem(LogDir.TO_SAMSUNG, Term.RESTORE, it.fields, "삭제 기록에서 ${Term.SAMSUNG}로") }))
+        if (connected) runLocked(config, allowMassDelete = false, { _, _ -> }, "${Term.RESTORE} 뒤 ${Term.BRIDGE}")
         n
     }
 
@@ -193,8 +194,8 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         val keep = recentAutoDeletedDetail.filter { a -> failedLines.any { it == a.fields } }
         prefs.put(KEY_AUTO_DELETED, null)
         keep.reversed().forEach { keepForUndo(it.fields, it.googleSide) }
-        if (back.isNotEmpty()) record(LogEntry(Clock.System.now().toEpochMilliseconds(), "되돌리기", back.map { LogItem(LogDir.TO_SAMSUNG, "되살림", it, "함께 지운 일정을 Samsung으로") }))
-        runLocked(config, allowMassDelete = false, { _, _ -> }, "되돌린 뒤 맞춤")
+        if (back.isNotEmpty()) record(LogEntry(Clock.System.now().toEpochMilliseconds(), "되돌리기", back.map { LogItem(LogDir.TO_SAMSUNG, Term.RESTORE, it, "함께 지운 일정을 ${Term.SAMSUNG}로") }))
+        runLocked(config, allowMassDelete = false, { _, _ -> }, "되돌린 뒤 ${Term.BRIDGE}")
         n
     }
 
@@ -227,9 +228,9 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     suspend fun run(
         config: BridgeConfig,
         allowMassDelete: Boolean = false,
-        /** A person asked ("지금 맞추기"): offer again what Google refused before. */
+        /** A person asked ("다시 연동"): offer again what Google refused before. */
         retryRefused: Boolean = false,
-        /** For the record: what started this pass ("앱", "백그라운드", "지금 맞추기", …). */
+        /** For the record: what started this pass ("앱", "백그라운드", "다시 연동", …). */
         trigger: String = "앱",
         onProgress: (Int, Int) -> Unit = { _, _ -> },
     ): BridgeReport = lock.withLock {
@@ -315,14 +316,14 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
                             // Kept once it is really gone, so a deletion carried over by itself can be undone.
                             if (!allowMassDelete) gById[op.googleId]?.let { g -> keepForUndo(g.fields, googleSide = true) }
                             pairs.remove(op.samsungId); deleted++; oloDeleted = oloDeleted + op.googleId
-                            gById[op.googleId]?.let { g -> items += LogItem(LogDir.TO_GOOGLE, "삭제", g.fields, "Samsung에서 사라짐") }
+                            gById[op.googleId]?.let { g -> items += LogItem(LogDir.TO_GOOGLE, "삭제", g.fields, "${Term.SAMSUNG}에서 삭제됨") }
                         } }
                     }
                     is BridgeOp.DeleteSamsung -> {
                         store.bridgeDelete(op.samsungId).also { if (it) {
                             if (!allowMassDelete) sById[op.samsungId]?.let { x -> keepForUndo(x.fields, googleSide = false) }
                             pairs.remove(op.samsungId); deleted++; oloDeleted = oloDeleted + op.samsungId
-                            sById[op.samsungId]?.let { s -> items += LogItem(LogDir.TO_SAMSUNG, "삭제", s.fields, "구글에서 사라짐") }
+                            sById[op.samsungId]?.let { s -> items += LogItem(LogDir.TO_SAMSUNG, "삭제", s.fields, "Google에서 삭제됨") }
                         } }
                     }
                 }
@@ -339,7 +340,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
                     is BridgeOp.DeleteSamsung -> LogDir.TO_SAMSUNG to sById[op.samsungId]?.fields
                     is BridgeOp.Agree -> LogDir.NONE to null
                 }
-                if (f != null) items += LogItem(dir, "실패", f, "쓰기를 휴대폰이 받지 않음 · 다음 맞춤에서 다시 시도")
+                if (f != null) items += LogItem(dir, "실패", f, "저장되지 않음 · 다음 ${Term.BRIDGE} 때 다시 시도")
             }
             if (op !is BridgeOp.Agree) onProgress(++done, total)
         }
@@ -372,10 +373,10 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         prefs.put(KEY_REPORT, report.encode())
         val note = listOfNotNull(
             plan.pendingDeletes.size.takeIf { it > 0 }?.let { "삭제 대기 ${it}개 (확인 필요)" },
-            plan.conflicts.takeIf { it > 0 }?.let { "양쪽 수정 ${it}건 · Samsung 기준" },
-            plan.orphans.size.takeIf { it > 0 }?.let { "동기화 전 사라짐 ${it}개" },
-            plan.unsupported.takeIf { it > 0 }?.let { "구글이 받지 않는 일정 ${it}개" },
-            (failed - items.count { it.op == "실패" }).takeIf { it > 0 }?.let { "쓰기 실패 ${it}건" },
+            plan.conflicts.takeIf { it > 0 }?.let { "동시 수정 ${it}건(삼성 쪽 유지)" },
+            plan.orphans.size.takeIf { it > 0 }?.let { "동기화 전에 삭제됨 ${it}개" },
+            plan.unsupported.takeIf { it > 0 }?.let { "Google이 지원하지 않는 일정 ${it}개" },
+            (failed - items.count { it.op == "실패" }).takeIf { it > 0 }?.let { "저장 실패 ${it}건" },
         ).joinToString(" · ")
         // Held deletes and events Google cannot hold stay the same pass after pass: the same
         // note again with nothing carried is a quiet pass, not a new entry.

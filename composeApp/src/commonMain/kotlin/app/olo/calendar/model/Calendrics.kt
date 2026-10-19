@@ -130,7 +130,7 @@ fun isGoogleHolidayCalendarId(ownerOrId: String?): Boolean =
 
 fun SyncKind.koLabel(): String = when (this) {
     SyncKind.GOOGLE -> "Google 동기화"
-    SyncKind.DEVICE -> "이 기기만"
+    SyncKind.DEVICE -> "이 기기에만 저장"
     SyncKind.SAMSUNG -> "삼성 계정"
     SyncKind.ICLOUD -> "iCloud"
     SyncKind.EXCHANGE -> "Exchange"

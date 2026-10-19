@@ -15,7 +15,7 @@ enum class LogDir { TO_GOOGLE, TO_SAMSUNG, NONE }
 
 data class LogItem(
     val dir: LogDir,
-    /** "새 일정", "수정", "삭제", "실패", "되살림". */
+    /** "새 일정", "수정", "삭제", "실패", "복원". */
     val op: String,
     val title: String,
     val startMillis: Long,
@@ -30,7 +30,7 @@ data class LogItem(
 
 data class LogEntry(
     val atMillis: Long,
-    /** What started the pass: "앱", "백그라운드", "지금 맞추기", "연결", "되살리기", … */
+    /** What started the pass: "앱", "백그라운드", "다시 연동", "연결", "복원", … */
     val trigger: String,
     val items: List<LogItem>,
     /** Counts worth knowing that are not items: held deletes, refused copies, … */
@@ -67,6 +67,34 @@ fun decodeLog(s: String?): List<LogEntry> = s.orEmpty().split(ES).mapNotNull { p
         note = p[2],
     )
 }
+
+/**
+ * A record written before docs/08 in today's words ("맞춤" → "연동", "되살림" → "복원"),
+ * so old and new entries read alike. New entries are written in these words already.
+ */
+fun currentWords(s: String): String = LEGACY_WORDS.fold(s) { acc, (old, new) -> acc.replace(old, new) }
+
+private val LEGACY_WORDS = listOf(
+    "앱 · 변경 감지" to "변경 감지",
+    "지금 맞추기" to "다시 ${Term.BRIDGE}",
+    "다시 맞추기" to "다시 ${Term.BRIDGE}",
+    "되살린 뒤 맞춤" to "${Term.RESTORE} 뒤 ${Term.BRIDGE}",
+    "되돌린 뒤 맞춤" to "되돌린 뒤 ${Term.BRIDGE}",
+    "되살리기" to Term.RESTORE,
+    "되살림" to Term.RESTORE,
+    "양쪽에서 지우기" to "양쪽에서 삭제",
+    "Samsung에서 사라짐" to "${Term.SAMSUNG}에서 삭제됨",
+    "구글에서 사라짐" to "Google에서 삭제됨",
+    "쓰기를 휴대폰이 받지 않음 · 다음 맞춤에서 다시 시도" to "저장되지 않음 · 다음 ${Term.BRIDGE} 때 다시 시도",
+    "양쪽 수정" to "동시 수정",
+    " · Samsung 기준" to "(삼성 쪽 유지)",
+    "동기화 전 사라짐" to "동기화 전에 삭제됨",
+    "구글이 받지 않는 일정" to "Google이 지원하지 않는 일정",
+    "쓰기 실패" to "저장 실패",
+    "지워진 기록에서 Samsung으로" to "삭제 기록에서 ${Term.SAMSUNG}로",
+    "함께 지운 일정을 Samsung으로" to "함께 지운 일정을 ${Term.SAMSUNG}로",
+    "구글로 " to "Google로 ",
+)
 
 /** "오후 1:30" in [zone]. */
 fun clockKo(millis: Long, zone: TimeZone): String {

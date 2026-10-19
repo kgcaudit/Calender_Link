@@ -331,8 +331,8 @@ private fun nearestStage(stage: AnchoredDraggableState<MonthStage>, velocity: Fl
 internal fun viewTitle(s: CalendarUiState): String = when (s.view) {
     ViewMode.YEAR -> "${s.selected.year}년"
     ViewMode.AGENDA -> "일정"
-    // One face, one size, fixed width: "2027년 01월" (no width jump between 9월 and 10월).
-    else -> "${s.month.year}년 ${s.month.month.toString().padStart(2, '0')}월"
+    // One face, one size, fixed width: "2027년 1월" (no width jump between 9월 and 10월).
+    else -> "${s.month.year}년 ${s.month.month}월"
 }
 
 /** Month pages; a settled swipe shows that month (the day number is kept). */
@@ -697,7 +697,7 @@ private fun DayPanel(
                     DayHeader(d, hs, showLunar, Modifier.padding(horizontal = OloLayout.ContentMargin), today = today, count = its.size)
                     if (its.isEmpty()) {
                         Text(
-                            "일정이 없습니다. 아래 입력줄에 적어 바로 추가할 수 있습니다.",
+                            "일정이 없습니다. 아래 입력줄에서 바로 추가할 수 있습니다.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(OloLayout.ContentMargin),
@@ -748,7 +748,7 @@ internal fun DayHeader(
             val meta = listOfNotNull(
                 KoreanLunar.fromSolar(day)?.takeIf { showLunar }?.longLabel(),
                 holidays.takeIf { it.isNotEmpty() }?.joinToString(" · "),
-                count.takeIf { it > 0 }?.let { "일정 $it" },
+                count.takeIf { it > 0 }?.let { "일정 ${it}개" },
             )
             if (meta.isNotEmpty()) {
                 Text(meta.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = OloTone.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -829,7 +829,7 @@ private fun DaySidePane(
     Column(Modifier.fillMaxSize().padding(top = 8.dp)) {
         DayHeader(day, holidays, showLunar, Modifier.padding(horizontal = 16.dp), today = today, count = items.size)
         if (items.isEmpty()) {
-            Text("일정이 없습니다. + 를 눌러 추가하세요.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(16.dp))
+            Text("일정이 없습니다. +를 눌러 추가할 수 있습니다.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(16.dp))
         }
         DayItems(items, calendars, zone, onOpen, endPadding = 16.dp)
     }

@@ -1,5 +1,6 @@
 package app.olo.calendar.ui
 
+import app.olo.calendar.model.currentWords
 import app.olo.calendar.model.koShort
 import androidx.compose.ui.text.style.TextOverflow
 import app.olo.calendar.design.color
@@ -45,6 +46,7 @@ import app.olo.calendar.design.OloTone
 import app.olo.calendar.design.calendarColor
 import app.olo.calendar.model.BridgePlan
 import app.olo.calendar.model.CalendarInfo
+import app.olo.calendar.model.Term
 import app.olo.calendar.store.BridgeReport
 import kotlinx.datetime.Clock
 
@@ -75,7 +77,7 @@ internal fun agoKo(atMillis: Long): String {
 }
 
 /**
- * "구글 메인 계정과 연결" (docs/07): Samsung Calendar stays as it is, and the
+ * "Google 메인 캘린더와 연결" (docs/07): Samsung Calendar stays as it is, and the
  * bridge keeps a copy of every event in the Google main calendar, both ways.
  */
 @Composable
@@ -94,15 +96,15 @@ fun BridgeSheet(
     val connected = state.settings.bridgeSamsungId == samsung.id && state.settings.bridgeOn
     OloSheet(onDismiss = { if (state.bridgeProgress == null) onDismiss() }) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("구글 메인 계정과 연결", style = MaterialTheme.typography.headlineSmall)
+            Text("${Term.GOOGLE_MAIN}와 연결", style = MaterialTheme.typography.headlineSmall)
             BridgeDiagram(samsung, if (connected) state.bridgeGoogle else null)
             Text(
-                "${samsung.name}은 그대로 두고, 같은 일정을 구글 메인 계정에 복제해 계속 맞춥니다. " +
-                    "갤럭시 탭·북은 ${samsung.name}로, 아이폰은 구글 계정으로 같은 일정을 봅니다.",
+                "${samsung.name}의 일정을 ${Term.GOOGLE_MAIN}와 계속 ${Term.BRIDGE}합니다. " +
+                    "갤럭시는 ${samsung.name}로, 아이폰은 Google로 같은 일정을 봅니다.",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             state.bridgeProgress?.let { (d, t) ->
-                Text("맞추는 중… $d / $t", style = MaterialTheme.typography.bodyLarge)
+                Text("${Term.BRIDGE} 중… $d / $t", style = MaterialTheme.typography.bodyLarge)
                 LinearProgressIndicator(progress = { if (t == 0) 0f else d.toFloat() / t }, modifier = Modifier.fillMaxWidth())
             }
             if (connected) Connected(state, controller, onEnableSync, onChanged, onDismiss, batteryUnrestricted, onBattery)
@@ -117,7 +119,7 @@ private fun BridgeDiagram(samsung: CalendarInfo, google: CalendarInfo?) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             End(calendarColor(samsung.colorArgb), "S", samsung.name, "갤럭시 폰·탭·북", Modifier.weight(1f))
             Text("⇄", fontSize = 22.sp, color = OloTone.accent, modifier = Modifier.padding(horizontal = 8.dp))
-            End(calendarColor(google?.colorArgb ?: 0xFF3D74B8.toInt()), "G", google?.accountName ?: "구글 메인 계정", "아이폰·아이패드·맥", Modifier.weight(1f))
+            End(calendarColor(google?.colorArgb ?: 0xFF3D74B8.toInt()), "G", google?.accountName ?: Term.GOOGLE_MAIN_ACCOUNT, "아이폰·아이패드·맥", Modifier.weight(1f))
         }
     }
 }
@@ -152,11 +154,11 @@ private fun Connect(
         target?.let { t -> plan = runCatching { controller.previewBridge(samsung.id, t.id) }.getOrNull() }
     }
     if (targets.isEmpty()) {
-        Text("휴대폰에 Google 계정이 없습니다. 설정 › 계정에서 구글 메인 계정을 먼저 추가해 주세요.", color = MaterialTheme.colorScheme.error)
+        Text("휴대폰에 Google 계정이 없습니다. 설정 > 계정 및 백업 > 계정 관리에서 Google 계정을 먼저 추가해 주세요.", color = MaterialTheme.colorScheme.error)
         OloTextButton("닫기", onDismiss)
         return
     }
-    Text("구글 메인 계정", style = MaterialTheme.typography.labelLarge)
+    Text(Term.GOOGLE_MAIN, style = MaterialTheme.typography.labelLarge)
     targets.forEach { c ->
         Row(Modifier.fillMaxWidth().clickable { target = c }, verticalAlignment = Alignment.CenterVertically) {
             RadioButton(selected = target?.id == c.id, onClick = { target = c })
@@ -170,7 +172,7 @@ private fun Connect(
     if (t != null && (t.accountName in state.sync.accountsWithSyncOff || t.accountName in state.sync.accountsNeedingAccess)) {
         Surface(color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f), shape = MaterialTheme.shapes.small) {
             Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("이 계정의 캘린더 동기화가 꺼져 있어 아이폰까지 가지 않습니다.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                Text("이 계정의 캘린더 동기화가 꺼져 있어 아이폰에 반영되지 않습니다.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                 OloTextButton("켜기", { onEnableSync(t.accountName) })
             }
         }
@@ -181,16 +183,21 @@ private fun Connect(
         Text("두 캘린더를 비교하는 중…", style = MaterialTheme.typography.bodyMedium)
     } else {
         Text("처음 연결하면", style = MaterialTheme.typography.labelLarge)
-        PlanLine("${samsung.name} → 구글", p.toGoogle)
-        PlanLine("구글 → ${samsung.name}", p.toSamsung)
-        PlanLine("이미 같은 일정(짝만 지음)", p.paired)
-        listOf(
-            "원본은 지우지 않습니다. 이후 어느 쪽에서 고치거나 지워도 다른 쪽이 따라갑니다.",
-            "양쪽에서 같은 일정을 동시에 고치면 ${samsung.name} 쪽을 남깁니다.",
-            "한 번에 많은 일정이 지워지면 멈추고 확인을 받습니다.",
-            "참석자와 삼성 전용 정보(스티커 등)는 복제하지 않습니다.",
-            "OLO에서는 짝지어진 일정을 한 번만 보여 줍니다.",
+        PlanLine("${samsung.name} → Google", p.toGoogle)
+        PlanLine("Google → ${samsung.name}", p.toSamsung)
+        PlanLine("이미 같은 일정(${Term.BRIDGE}만 함)", p.paired)
+        var more by remember { mutableStateOf(false) }
+        listOfNotNull(
+            "어느 쪽에서 고치거나 지워도 다른 쪽이 따라갑니다.",
+            "양쪽에서 동시에 고치면 ${samsung.name} 쪽을 남깁니다.",
+            "한 번에 많이 지워지면 멈추고 묻습니다.",
+            "참석자와 삼성 전용 정보(스티커 등)는 옮기지 않습니다.".takeIf { more },
+            "OLO에서는 ${Term.BRIDGE}된 일정을 한 번만 보여 줍니다.".takeIf { more },
         ).forEach { Text("· $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        Text(
+            if (more) "간단히" else "자세히", style = MaterialTheme.typography.labelLarge, color = OloTone.accent,
+            modifier = Modifier.clickable { more = !more }.padding(vertical = 4.dp),
+        )
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
         OloTextButton("취소", onDismiss)
@@ -228,20 +235,20 @@ private fun BackgroundCard(state: CalendarUiState, batteryUnrestricted: Boolean,
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             when {
                 error != null -> {
-                    Text("마지막 맞춤이 실패했습니다", style = MaterialTheme.typography.titleSmall)
+                    Text("마지막 ${Term.BRIDGE}이 실패했습니다", style = MaterialTheme.typography.titleSmall)
                     Text(error, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-                    OloTextButton("다시 맞추기", { controller.runBridge(retryRefused = true, trigger = "다시 맞추기") }, enabled = state.bridgeProgress == null)
+                    OloTextButton("다시 ${Term.BRIDGE}", { controller.runBridge(retryRefused = true, trigger = "다시 ${Term.BRIDGE}") }, enabled = state.bridgeProgress == null)
                 }
                 else -> {
                     val hours = (stale ?: 0L) / 3_600_000L
                     Text(
-                        if (stale != null) "앱을 닫아 둔 동안 자동 맞춤이 ${if (hours >= 1) "${hours}시간" else "${stale / 60_000L}분"} 멈춰 있었습니다"
-                        else "앱을 닫으면 자동 맞춤이 멈출 수 있습니다",
+                        if (stale != null) "앱을 닫아 둔 동안 자동 ${Term.BRIDGE}이 ${if (hours >= 1) "${hours}시간" else "${stale / 60_000L}분"} 멈췄습니다"
+                        else "앱을 닫으면 자동 ${Term.BRIDGE}이 멈출 수 있습니다",
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Text(
-                        if (batteryUnrestricted) "배터리는 제한 없음입니다. 설정 → 배터리 → 백그라운드 사용 제한에서 '잠자는 앱'에 OLO가 있으면 빼 주세요."
-                        else "Samsung 절전 관리가 백그라운드 작업을 막고 있습니다. 절전 예외로 두면 닫아 둔 동안에도 맞춥니다.",
+                        if (batteryUnrestricted) "배터리는 이미 제한 없음입니다. 설정 > 배터리 > 백그라운드 사용 제한 > ‘잠자는 앱’에 OLO가 있으면 빼 주세요."
+                        else "휴대폰 절전 관리가 백그라운드 작업을 막고 있습니다. 절전 예외로 두면 앱을 닫아도 ${Term.BRIDGE}합니다.",
                         style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -275,11 +282,11 @@ private fun Connected(
     if (dupeCount > 0) {
         Surface(color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f), shape = MaterialTheme.shapes.small) {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("똑같은 일정이 두 벌 있습니다", style = MaterialTheme.typography.titleSmall)
+                Text("같은 일정이 두 개씩 있습니다", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "${state.bridgeSamsung?.name ?: "Samsung Calendar"} ${dupes.first.size}개 · ${google?.accountName ?: "구글"} ${dupes.second.size}개: " +
+                    "${state.bridgeSamsung?.name ?: Term.SAMSUNG} ${dupes.first.size}개 · ${google?.accountName ?: "Google"} ${dupes.second.size}개: " +
                         (dupes.first + dupes.second).distinct().take(8).joinToString(", ") +
-                        ". 제목·시작·끝·반복이 같은 일정끼리 묶어, 알림·메모가 가장 많이 남은 한 벌만 두고 지웁니다.",
+                        ". 제목·시간·반복이 같은 일정끼리 묶어, 알림·메모가 가장 많은 하나만 남기고 삭제합니다.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Row { OloButton("중복 ${dupeCount}개 정리", { controller.removeBridgeDuplicates { dupes = emptyList<String>() to emptyList() } }, enabled = state.bridgeProgress == null) }
@@ -287,16 +294,16 @@ private fun Connected(
         }
     }
     Text(
-        r?.let { "마지막 맞춤 ${agoKo(it.atMillis)} · 짝 ${it.linked}개" } ?: "첫 맞춤을 기다리는 중",
+        r?.let { "마지막 ${Term.BRIDGE} ${agoKo(it.atMillis)} · ${Term.BRIDGE}된 일정 ${it.linked}개" } ?: "첫 ${Term.BRIDGE}을 기다리는 중",
         style = MaterialTheme.typography.titleSmall,
     )
     r?.let {
         val parts = buildList {
-            if (it.toGoogle > 0) add("구글로 ${it.toGoogle}")
-            if (it.toSamsung > 0) add("삼성으로 ${it.toSamsung}")
-            if (it.deleted > 0) add("삭제 ${it.deleted}")
-            if (it.conflicts > 0) add("동시 수정 ${it.conflicts}건은 삼성 쪽을 남김")
-            if (it.failed > 0) add("실패 ${it.failed}")
+            if (it.toGoogle > 0) add("Google로 ${it.toGoogle}개")
+            if (it.toSamsung > 0) add("삼성으로 ${it.toSamsung}개")
+            if (it.deleted > 0) add("삭제 ${it.deleted}개")
+            if (it.conflicts > 0) add("동시 수정 ${it.conflicts}건(삼성 쪽 유지)")
+            if (it.failed > 0) add("실패 ${it.failed}건")
         }
         if (parts.isNotEmpty()) Text("지난번: " + parts.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -323,8 +330,8 @@ private fun Connected(
                         Text(f.title.ifBlank { "(제목 없음)" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                         Text(eventWhenKo(f, controller.zone), style = MaterialTheme.typography.bodySmall)
                         Text(
-                            if (a.googleSide) "Samsung Calendar에서 사라져 → 구글 메인(${state.bridgeGoogle?.accountName ?: "Google"})에서 지움"
-                            else "구글 메인에서 사라져 → Samsung Calendar에서 지움",
+                            if (a.googleSide) "${Term.SAMSUNG}에서 삭제됨 → ${Term.GOOGLE_MAIN}에서도 삭제"
+                            else "${Term.GOOGLE_MAIN}에서 삭제됨 → ${Term.SAMSUNG}에서도 삭제",
                             style = MaterialTheme.typography.bodySmall, color = OloTone.accent,
                         )
                         if (detail) {
@@ -333,10 +340,10 @@ private fun Connected(
                                 f.rrule.takeIf { it.isNotBlank() }?.let { "반복 · $it" },
                                 f.reminderMinutes.takeIf { it.isNotEmpty() }?.let { m -> "알림 · " + m.sorted().joinToString(", ") { "${it}분 전" } },
                                 f.description.takeIf { it.isNotBlank() }?.let { "메모 · " + it.take(80) },
-                                "지운 시각 · ${agoKo(a.atMillis)}",
+                                "삭제 시각 · ${agoKo(a.atMillis)}",
                             ).forEach { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) }
                         } else {
-                            Text("지운 시각 · ${agoKo(a.atMillis)}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                            Text("삭제 시각 · ${agoKo(a.atMillis)}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                         }
                     }
                 }
@@ -361,10 +368,10 @@ private fun Connected(
                     "다른 쪽에는 아직 남아 있습니다: " + pending.take(8).joinToString(", ") { it.first } + if (pending.size > 8) " 외 ${pending.size - 8}개" else "",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Text("직접 지운 것이 아니라면 '되살리기'를 누르세요. 남아 있는 쪽에서 다시 복제합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("직접 지운 게 아니면 ‘${Term.RESTORE}’을 누르세요. 남아 있는 쪽에서 다시 가져옵니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OloButton("되살리기", { controller.keepBridgePending(); pending = emptyList() }, enabled = state.bridgeProgress == null)
-                    OloTextButton("양쪽에서 지우기", { controller.runBridge(allowMassDelete = true, trigger = "양쪽에서 지우기"); pending = emptyList() })
+                    OloButton(Term.RESTORE, { controller.keepBridgePending(); pending = emptyList() }, enabled = state.bridgeProgress == null)
+                    OloTextButton("양쪽에서 삭제", { controller.runBridge(allowMassDelete = true, trigger = "양쪽에서 삭제"); pending = emptyList() })
                 }
             }
         }
@@ -380,14 +387,14 @@ private fun Connected(
     }
     google?.let {
         Text(
-            "· 삼성 캘린더 앱에서 ${it.accountName} 캘린더 표시를 끄면 같은 일정이 두 번 보이지 않습니다. 아이폰에서 만든 일정도 ${state.bridgeSamsung?.name ?: "Samsung Calendar"}로 들어오므로 빠지는 일정은 없습니다.",
+            "· 삼성 캘린더 앱에서 ${it.accountName} 캘린더를 숨기면 같은 일정이 두 번 보이지 않습니다. 아이폰에서 만든 일정도 ${state.bridgeSamsung?.name ?: Term.SAMSUNG}로 들어옵니다.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
         OloTextButton("연결 해제", { controller.stopBridge(); onChanged(false); onDismiss() })
         Spacer(Modifier.weight(1f))
-        OloOutlinedButton("지금 맞추기", { controller.runBridge(retryRefused = true, trigger = "지금 맞추기") }, enabled = state.bridgeProgress == null)
+        OloOutlinedButton("다시 ${Term.BRIDGE}", { controller.runBridge(retryRefused = true, trigger = "다시 ${Term.BRIDGE}") }, enabled = state.bridgeProgress == null)
         OloButton("닫기", onDismiss)
     }
 }
@@ -403,17 +410,17 @@ private fun RecoverCard(samsungId: String, googleId: String, state: CalendarUiSt
     LaunchedEffect(samsungId, googleId, state.bridgeProgress == null) {
         if (state.bridgeProgress == null) found = runCatching { controller.bridgeRecoverable(samsungId, googleId) }.getOrDefault(emptyList())
     }
-    restored?.let { Text("일정 ${it}개를 되살렸습니다.", style = MaterialTheme.typography.bodyMedium, color = OloTone.accent) }
+    restored?.let { Text("일정 ${it}개를 ${Term.RESTORE}했습니다.", style = MaterialTheme.typography.bodyMedium, color = OloTone.accent) }
     if (found.isEmpty()) return
     Surface(color = OloTone.container, shape = MaterialTheme.shapes.small) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("되살릴 수 있는 지워진 일정 ${found.size}개", style = MaterialTheme.typography.titleSmall)
+            Text("${Term.RESTORE}할 수 있는 일정 ${found.size}개", style = MaterialTheme.typography.titleSmall)
             Text(
                 found.take(10).joinToString(", ") + if (found.size > 10) " 외 ${found.size - 10}개" else "",
                 style = MaterialTheme.typography.bodySmall,
             )
-            Text("휴대폰에 아직 남아 있는 삭제 기록에서 찾았습니다. Samsung Calendar로 되살리고, 연결되어 있으면 구글에도 복제합니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row { OloButton("${found.size}개 되살리기", { controller.restoreDeleted(samsungId, googleId) { n -> restored = n; found = emptyList() } }, enabled = state.bridgeProgress == null) }
+            Text("휴대폰에 남아 있는 삭제 기록에서 찾았습니다. ${Term.SAMSUNG}로 ${Term.RESTORE}하고, 연결되어 있으면 ${Term.GOOGLE_MAIN}에도 넣습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row { OloButton("${found.size}개 ${Term.RESTORE}", { controller.restoreDeleted(samsungId, googleId) { n -> restored = n; found = emptyList() } }, enabled = state.bridgeProgress == null) }
         }
     }
 }
@@ -431,7 +438,7 @@ private fun LogCard(state: CalendarUiState, controller: CalendarController) {
     val cs = MaterialTheme.colorScheme
     val zone = controller.zone
     Text(
-        if (open) "주고받은 기록 접기" else "주고받은 기록 보기 (${entries.size})",
+        if (open) "${Term.BRIDGE} 기록 접기" else "${Term.BRIDGE} 기록 보기 (${entries.size})",
         style = MaterialTheme.typography.labelLarge, color = OloTone.accent,
         modifier = Modifier.clickable { open = !open }.padding(vertical = 6.dp),
     )
@@ -448,20 +455,20 @@ private fun LogCard(state: CalendarUiState, controller: CalendarController) {
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("${dayKo(e.atMillis, zone)} ${clockKo(e.atMillis, zone)}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Text(e.trigger, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Text(currentWords(e.trigger), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
             }
             e.items.forEach { i ->
                 Row(verticalAlignment = Alignment.Top) {
                     val (arrow, tint) = when (i.dir) {
-                        LogDir.TO_GOOGLE -> "S → G" to OloHue.SKY.color()
-                        LogDir.TO_SAMSUNG -> "G → S" to OloHue.VIDEO.color()
+                        LogDir.TO_GOOGLE -> "삼성 → G" to OloHue.SKY.color()
+                        LogDir.TO_SAMSUNG -> "G → 삼성" to OloHue.VIDEO.color()
                         LogDir.NONE -> "·" to cs.onSurfaceVariant
                     }
-                    Text(arrow, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = tint, modifier = Modifier.width(44.dp).padding(top = 2.dp))
+                    Text(arrow, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = tint, modifier = Modifier.width(52.dp).padding(top = 2.dp))
                     Column(Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                i.op, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold,
+                                currentWords(i.op), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold,
                                 color = when (i.op) { "삭제", "실패" -> cs.error; "새 일정" -> OloTone.accent; else -> cs.onSurface },
                                 modifier = Modifier.padding(end = 6.dp),
                             )
@@ -471,19 +478,19 @@ private fun LogCard(state: CalendarUiState, controller: CalendarController) {
                             eventDayKo(i.startMillis, i.allDay, zone) + " " + spanKo(i.startMillis, i.endMillis, i.allDay, zone),
                             style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                         )
-                        if (i.detail.isNotBlank()) Text(i.detail, style = MaterialTheme.typography.labelSmall, color = OloTone.accent)
+                        if (i.detail.isNotBlank()) Text(currentWords(i.detail), style = MaterialTheme.typography.labelSmall, color = OloTone.accent)
                     }
                 }
             }
-            if (e.note.isNotBlank()) Text(e.note, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            if (e.note.isNotBlank()) Text(currentWords(e.note), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         }
     }
     // Lines from before 0.10.8 (counts only), kept until they age out.
     if (legacy.isNotEmpty()) {
-        Text("이전 기록 (개수만)", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+        Text("0.10.8 이전 기록", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
         legacy.take(5).forEach { line ->
             val at = line.substringBefore('|').toLongOrNull()
-            Text((at?.let { agoKo(it) + " · " } ?: "") + line.substringAfter('|'), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            Text((at?.let { agoKo(it) + " · " } ?: "") + currentWords(line.substringAfter('|')), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         }
     }
 }

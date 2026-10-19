@@ -92,8 +92,8 @@ private fun PermissionScreen(deniedForGood: Boolean, onRequest: () -> Unit, onSe
     ) {
         Text("캘린더 접근 권한이 필요합니다", style = MaterialTheme.typography.headlineSmall)
         Text(
-            "OLO Calendar는 휴대폰의 캘린더(삼성 캘린더·아이폰 캘린더와 같은 저장소)를 읽고 씁니다. " +
-                "일정은 OLO 서버로 보내지 않고, Google과의 동기화는 휴대폰이 그대로 처리합니다.",
+            "OLO Calendar는 휴대폰 캘린더(삼성 캘린더와 같은 저장소)를 읽고 씁니다. " +
+                "일정은 OLO 서버로 보내지 않으며, Google 동기화는 휴대폰이 그대로 처리합니다.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.widthIn(max = 420.dp),

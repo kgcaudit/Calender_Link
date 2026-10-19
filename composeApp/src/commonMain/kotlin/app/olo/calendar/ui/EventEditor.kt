@@ -83,7 +83,7 @@ fun EventEditorSheet(
             Text(if (initial.id == null) "새 일정" else "일정 편집", style = MaterialTheme.typography.headlineSmall)
             if (seriesEdit) {
                 Text(
-                    "반복 일정 전체를 수정합니다. (이번 일정만·이후 일정 수정은 다음 버전에서 지원)",
+                    "반복 일정은 전체가 함께 수정됩니다.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -99,11 +99,11 @@ fun EventEditorSheet(
             }
             DateTimeRow("시작", d.startDate, d.startTime, d.allDay, { pick = PickTarget.START_DATE }, { pick = PickTarget.START_TIME })
             DateTimeRow("종료", d.endDate, d.endTime, d.allDay, { pick = PickTarget.END_DATE }, { pick = PickTarget.END_TIME })
-            if (!valid) Text("종료가 시작보다 빠릅니다.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            if (!valid) Text("종료 시간이 시작보다 빠릅니다.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
 
             if (keepRule) {
                 Text(
-                    "반복: OLO가 편집할 수 없는 반복 규칙이라 그대로 유지합니다.",
+                    "반복 · 다른 앱에서 만든 규칙(그대로 유지)",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -151,7 +151,7 @@ fun EventEditorSheet(
             val target = calendars.firstOrNull { it.id == d.calendarId }
             if (target != null && !target.kind.reachesGoogle) {
                 Text(
-                    "이 캘린더는 Google과 동기화되지 않아 다른 기기(아이폰 등)에 나타나지 않습니다.",
+                    "이 기기에만 저장되어 아이폰 등 다른 기기에는 보이지 않습니다.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
