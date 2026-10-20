@@ -1,5 +1,6 @@
 package app.olo.calendar.ui
 
+import app.olo.calendar.model.EditScope
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -65,6 +66,8 @@ fun EventEditorSheet(
     initial: EventDraft,
     stored: StoredEvent?,
     calendars: List<CalendarInfo>,
+    /** For one occurrence of a repeating event: how far the edit reaches (docs/10). */
+    scope: EditScope? = null,
     onSave: (EventDraft) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -81,12 +84,14 @@ fun EventEditorSheet(
     OloSheet(onDismiss) {
         Column(Modifier.verticalScroll(rememberScrollState()).imePadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(if (initial.id == null) "새 일정" else "일정 편집", style = MaterialTheme.typography.headlineSmall)
-            if (seriesEdit) {
-                Text(
-                    "반복 일정은 전체가 함께 수정됩니다.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            val reachNote = when {
+                scope == EditScope.THIS -> "반복 중 이 일정만 바뀝니다."
+                scope == EditScope.FOLLOWING -> "이 일정부터 이후 일정이 바뀝니다. 지난 일정은 그대로입니다."
+                seriesEdit -> "반복 일정 전체가 바뀝니다."
+                else -> null
+            }
+            if (reachNote != null) {
+                Text(reachNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             OutlinedTextField(
                 value = d.title, onValueChange = { d = d.copy(title = it) },
@@ -101,7 +106,9 @@ fun EventEditorSheet(
             DateTimeRow("종료", d.endDate, d.endTime, d.allDay, { pick = PickTarget.END_DATE }, { pick = PickTarget.END_TIME })
             if (!valid) Text("종료 시간이 시작보다 빠릅니다.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
 
-            if (keepRule) {
+            if (scope == EditScope.THIS) {
+                // A changed occurrence cannot repeat on its own.
+            } else if (keepRule) {
                 Text(
                     "반복 · 다른 앱에서 만든 규칙(그대로 유지)",
                     style = MaterialTheme.typography.bodyMedium,
@@ -133,8 +140,9 @@ fun EventEditorSheet(
                 label = { Text("메모") }, minLines = 2, modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.small,
             )
 
-            Text("저장할 캘린더", style = MaterialTheme.typography.labelLarge)
-            calendars.forEach { c ->
+            // One occurrence stays in its series' calendar.
+            if (scope != EditScope.THIS) Text("저장할 캘린더", style = MaterialTheme.typography.labelLarge)
+            if (scope != EditScope.THIS) calendars.forEach { c ->
                 Row(
                     Modifier.fillMaxWidth().clickable { d = d.copy(calendarId = c.id) },
                     verticalAlignment = Alignment.CenterVertically,
@@ -166,7 +174,7 @@ fun EventEditorSheet(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                 OloTextButton("취소", onDismiss)
-                OloButton("저장", { onSave(d.copy(title = d.title.trim(), keepExistingRule = keepRule)) }, enabled = valid)
+                OloButton("저장", { onSave(d.copy(title = d.title.trim(), keepExistingRule = keepRule && scope != EditScope.THIS)) }, enabled = valid)
             }
             Spacer(Modifier.height(8.dp))
         }

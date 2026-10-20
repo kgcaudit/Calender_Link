@@ -1,5 +1,8 @@
 package app.olo.calendar.ui
 
+import app.olo.calendar.model.EditScope
+import app.olo.calendar.model.OccurrenceRef
+import app.olo.calendar.model.ref
 import kotlinx.datetime.Instant
 import kotlin.time.Duration.Companion.days
 import app.olo.calendar.model.hueOf
@@ -33,6 +36,9 @@ import app.olo.calendar.store.BridgeEngine
 import app.olo.calendar.store.BridgeReport
 import app.olo.calendar.model.BridgePlan
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,7 +56,12 @@ import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
 
+/** A deletion waiting out its "실행 취소" moment (docs/10 §3): hidden on screen, not yet sent to the store. */
+data class PendingDelete(val ref: OccurrenceRef, val scope: EditScope, val title: String)
+
 data class CalendarUiState(
+    /** The deletion that can still be undone; its occurrences are already off the screen. */
+    val pendingDelete: PendingDelete? = null,
     val month: YearMonth,
     val selected: LocalDate,
     val today: LocalDate,
@@ -254,7 +265,7 @@ class CalendarController(
                     bridgeLinkedGoogle = bridge.linkedGoogleIds(),
                     bridgeReport = r.getOrNull() ?: it.bridgeReport,
                     bridgeError = r.exceptionOrNull()?.let { e -> e.message ?: e::class.simpleName ?: "알 수 없는 오류" },
-                    occurrences = shownOccurrences(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
+                    occurrences = shownNow(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
                 )
             }
             val d = runCatching { bridge.findDuplicates(config) }.getOrNull()
@@ -280,7 +291,7 @@ class CalendarController(
                     bridgeDuplicates = 0,
                     bridgeLinkedGoogle = bridge.linkedGoogleIds(),
                     bridgeReport = bridge.lastReport ?: it.bridgeReport,
-                    occurrences = shownOccurrences(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
+                    occurrences = shownNow(it.allOccurrences, it.calendars, it.settings, bridge.linkedGoogleIds()),
                 )
             }
             store.requestSync()
@@ -342,7 +353,7 @@ class CalendarController(
     /** Stops the bridge; both calendars keep every event they hold. */
     fun stopBridge() {
         updateSettings { it.copy(bridgeSamsungId = null, bridgeGoogleId = null) }
-        _state.update { it.copy(bridgeLinkedGoogle = emptySet(), bridgeReport = null, occurrences = shownOccurrences(it.allOccurrences, it.calendars, it.settings, emptySet())) }
+        _state.update { it.copy(bridgeLinkedGoogle = emptySet(), bridgeReport = null, occurrences = shownNow(it.allOccurrences, it.calendars, it.settings, emptySet())) }
         scope.launch { bridge.forget() }
     }
 
@@ -434,7 +445,7 @@ class CalendarController(
                     it.copy(
                         rawCalendars = l.calendars, calendars = recolored(l.calendars, it.settings),
                         allOccurrences = l.occurrences, sync = l.sync, eventCounts = l.counts,
-                        occurrences = shownOccurrences(l.occurrences, l.calendars, it.settings, it.bridgeLinkedGoogle),
+                        occurrences = shownNow(l.occurrences, l.calendars, it.settings, it.bridgeLinkedGoogle),
                         loading = false, error = null, today = todayNow,
                     )
                 }
@@ -502,7 +513,7 @@ class CalendarController(
             else it.copy(
                 settings = next,
                 calendars = recolored(it.rawCalendars, next),
-                occurrences = shownOccurrences(it.allOccurrences, it.calendars, next, it.bridgeLinkedGoogle),
+                occurrences = shownNow(it.allOccurrences, it.calendars, next, it.bridgeLinkedGoogle),
             )
         }
         if (next.weekStart != before.weekStart) reload()
@@ -523,7 +534,7 @@ class CalendarController(
         val from = LocalDate(1900, 1, 1).atStartOfDayIn(zone)
         val to = todayNow.plus(DatePeriod(years = SEARCH_YEARS_AHEAD)).atStartOfDayIn(zone)
         val s = _state.value
-        return shownOccurrences(store.search(query, from, to), s.calendars, s.settings, s.bridgeLinkedGoogle)
+        return shownNow(store.search(query, from, to), s.calendars, s.settings, s.bridgeLinkedGoogle)
     }
 
     /**
@@ -563,13 +574,62 @@ class CalendarController(
         }
     }
 
-    fun delete(id: String) {
+    /** Saves [draft] for [reach] of a repeating event, from occurrence [at] (docs/10 §2). */
+    fun saveOccurrence(draft: EventDraft, at: OccurrenceRef, reach: EditScope) {
         scope.launch {
-            runCatching { store.delete(id) }
-                .onFailure { e -> _state.update { it.copy(error = "삭제하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
+            runCatching { store.saveOccurrence(draft, at, reach) }
+                .onFailure { e -> _state.update { it.copy(error = "저장하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
             reload()
             onChanged()
         }
+    }
+
+    private var pendingJob: Job? = null
+    /** Outlives the screen, so a deletion left pending when OLO goes away still happens. */
+    private val detached = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Deletes [reach] of [o] after a moment in which "실행 취소" takes it back
+     * (docs/10 §3). Nothing reaches the store, Samsung Calendar or the bridge
+     * until then, so an undone deletion leaves no trace on the iPhone either.
+     */
+    fun delete(o: Occurrence, reach: EditScope = EditScope.ALL) {
+        flushPendingDelete()
+        val p = PendingDelete(o.ref(), reach, o.title)
+        _state.update { it.copy(pendingDelete = p, occurrences = it.occurrences.filterNot { x -> p.ref.covers(x, p.scope) }) }
+        pendingJob = scope.launch { delay(UNDO_MILLIS); commitDelete(p) }
+    }
+
+    fun undoDelete() {
+        pendingJob?.cancel()
+        pendingJob = null
+        if (_state.value.pendingDelete == null) return
+        _state.update { it.copy(pendingDelete = null) }
+        _state.update { it.copy(occurrences = shownNow(it.allOccurrences, it.calendars, it.settings, it.bridgeLinkedGoogle)) }
+    }
+
+    /** Sends a pending deletion now (OLO leaves the screen, or another deletion follows). */
+    fun flushPendingDelete() {
+        val p = _state.value.pendingDelete ?: return
+        pendingJob?.cancel()
+        pendingJob = null
+        detached.launch { commitDelete(p) }
+    }
+
+    private suspend fun commitDelete(p: PendingDelete) {
+        if (_state.value.pendingDelete != p) return
+        _state.update { it.copy(pendingDelete = null) }
+        runCatching { store.deleteOccurrence(p.ref, p.scope) }
+            .onFailure { e -> _state.update { it.copy(error = "삭제하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
+        reload()
+        onChanged()
+    }
+
+    /** [shownOccurrences] less what a pending deletion has taken off the screen. */
+    private fun shownNow(all: List<Occurrence>, calendars: List<CalendarInfo>, settings: AppSettings, bridged: Set<String>): List<Occurrence> {
+        val shown = shownOccurrences(all, calendars, settings, bridged)
+        val p = _state.value.pendingDelete ?: return shown
+        return shown.filterNot { p.ref.covers(it, p.scope) }
     }
 
     /** Turns an account's calendar sync on (or back off, for undo) and reloads; [done] gets whether the OS took it. */
@@ -684,3 +744,6 @@ private class Loaded(
 )
 
 private const val NO_CALENDAR = "새 일정을 저장할 수 있는 캘린더가 없습니다."
+
+/** How long "실행 취소" is offered after a deletion. */
+const val UNDO_MILLIS = 5_000L

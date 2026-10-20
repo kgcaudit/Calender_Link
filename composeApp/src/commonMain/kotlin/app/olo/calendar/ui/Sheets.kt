@@ -42,6 +42,7 @@ import app.olo.calendar.design.status
 import app.olo.calendar.model.AppSettings
 import app.olo.calendar.model.CalendarInfo
 import app.olo.calendar.model.Term
+import app.olo.calendar.model.EditScope
 import kotlinx.datetime.DayOfWeek
 import app.olo.calendar.model.MovePlan
 import app.olo.calendar.model.MoveResult
@@ -87,11 +88,15 @@ fun EventDetailSheet(
     occurrence: Occurrence,
     controller: CalendarController,
     calendars: Map<String, CalendarInfo>,
-    onEdit: (StoredEvent) -> Unit,
+    /** Edit, with the reach chosen for an occurrence of a repeating event (null: a single event). */
+    onEdit: (StoredEvent, EditScope?) -> Unit,
+    /** A copy of this occurrence as a new single event, opened in the editor. */
+    onDuplicate: (StoredEvent) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     var stored by remember { mutableStateOf<StoredEvent?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var askEdit by remember { mutableStateOf(false) }
     LaunchedEffect(occurrence.eventId) { stored = controller.load(occurrence.eventId) }
     val cal = calendars[occurrence.calendarId]
     // A bridged event's deletion carries to the other side and on to the iPhone: say so before it happens.
@@ -124,25 +129,52 @@ fun EventDetailSheet(
         Spacer(Modifier.height(16.dp))
         val s = stored
         if (s != null && s.calendarWritable) {
-            if (confirmDelete) {
-                Text(
-                    (if (s.rawRule != null || occurrence.recurring) "반복 일정 전체를 삭제할까요?" else "이 일정을 삭제할까요?") +
-                        (if (bridged) " ${Term.GOOGLE_MAIN}와 아이폰에서도 삭제됩니다." else ""),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                    OloTextButton("취소", { confirmDelete = false })
-                    OloOutlinedButton("삭제", { controller.delete(occurrence.eventId); onDismiss() })
+            // One occurrence of a series: edits and deletions ask how far they reach.
+            // A changed occurrence (an exception row) is only ever itself.
+            val series = s.rawRule != null && !s.isException
+            val alsoThere = if (bridged) " ${Term.GOOGLE_MAIN}와 아이폰에서도 삭제됩니다." else ""
+            when {
+                confirmDelete && series -> {
+                    Text("반복 일정입니다. 어디까지 삭제할까요?$alsoThere", style = MaterialTheme.typography.bodyMedium)
+                    ScopeChoices(onPick = { reach -> controller.delete(occurrence, reach); onDismiss() }, onCancel = { confirmDelete = false }, destructive = true)
                 }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OloButton("편집", { onEdit(s) })
+                confirmDelete -> {
+                    Text(
+                        (if (s.isException) "반복 중 이 일정만 삭제할까요?" else "이 일정을 삭제할까요?") + alsoThere,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                        OloTextButton("취소", { confirmDelete = false })
+                        OloOutlinedButton("삭제", { controller.delete(occurrence, if (s.isException) EditScope.THIS else EditScope.ALL); onDismiss() })
+                    }
+                }
+                askEdit -> {
+                    Text("반복 일정입니다. 어디까지 바꿀까요?", style = MaterialTheme.typography.bodyMedium)
+                    ScopeChoices(onPick = { reach -> askEdit = false; onEdit(s, reach) }, onCancel = { askEdit = false }, destructive = false)
+                }
+                else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OloButton("편집", { if (series) askEdit = true else onEdit(s, if (s.isException) EditScope.THIS else null) })
+                    OloOutlinedButton("복제", { onDuplicate(s) })
                     OloTextButton("삭제", { confirmDelete = true }, color = MaterialTheme.colorScheme.error)
                 }
             }
         } else if (s != null) {
             Text("읽기 전용 캘린더라 수정할 수 없습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+/** "이 일정만 / 이 일정과 이후 일정 / 전체 반복 일정", one per line (Samsung and Google ask the same). */
+@Composable
+private fun ScopeChoices(onPick: (EditScope) -> Unit, onCancel: () -> Unit, destructive: Boolean) {
+    Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        EditScope.entries.forEach { reach ->
+            OloTextButton(
+                reach.label + if (destructive) " 삭제" else "", { onPick(reach) },
+                color = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            )
+        }
+        OloTextButton("취소", onCancel, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

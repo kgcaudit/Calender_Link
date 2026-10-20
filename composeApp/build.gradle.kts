@@ -34,6 +34,7 @@ kotlin {
             implementation("org.jetbrains.compose.ui:ui-backhandler:1.9.0")
             implementation(libs.kotlinx.datetime)
             implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.androidx.lifecycle.runtime.compose)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
@@ -62,8 +63,8 @@ android {
         applicationId = "app.olo.calendar"
         minSdk = 26
         targetSdk = 36
-        versionCode = 41
-        versionName = "0.12.2"
+        versionCode = 42
+        versionName = "0.13.0"
     }
 
     buildTypes {

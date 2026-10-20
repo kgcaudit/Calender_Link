@@ -86,6 +86,8 @@ fun App(
             if (granted) {
                 val scope = rememberCoroutineScope()
                 val controller = remember(store) { CalendarController(store, scope, prefs = prefs, onChanged = onChanged) }
+                // Leaving OLO sends a deletion still waiting for "실행 취소" (docs/10 §3).
+                androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_STOP) { controller.flushPendingDelete() }
                 val request = openRequest?.collectAsState()?.value
                 CalendarScreen(controller, settings, request = request, onRequestHandled = onOpened)
             } else {

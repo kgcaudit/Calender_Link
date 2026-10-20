@@ -2,6 +2,10 @@ package app.olo.calendar.ui
 
 import app.olo.calendar.design.OloMotion
 import app.olo.calendar.model.eulReul
+import app.olo.calendar.model.EditScope
+import app.olo.calendar.model.OccurrenceRef
+import app.olo.calendar.model.occurrenceDraft
+import app.olo.calendar.model.ref
 import app.olo.calendar.model.iGa
 import app.olo.calendar.design.OloTone
 import androidx.compose.animation.togetherWith
@@ -96,7 +100,8 @@ import kotlinx.datetime.toLocalDateTime
 private sealed interface Sheet {
     data object None : Sheet
     data class Detail(val occurrence: Occurrence) : Sheet
-    data class Editor(val draft: EventDraft, val stored: StoredEvent?) : Sheet
+    /** [scope] and [at]: an edit of one occurrence of a repeating event (docs/10). */
+    data class Editor(val draft: EventDraft, val stored: StoredEvent?, val scope: EditScope? = null, val at: OccurrenceRef? = null) : Sheet
     data object Calendars : Sheet
     data object Sync : Sheet
     data class Move(val fromCalendarId: String) : Sheet
@@ -271,6 +276,7 @@ fun CalendarScreen(
         } else {
             ModalNavigationDrawer(drawerState = drawer, drawerContent = { DrawerContent(nav) }) { content() }
         }
+        UndoBar(state.pendingDelete, controller::undoDelete, Modifier.align(Alignment.BottomCenter).padding(bottom = 76.dp))
     }
 
     if (pickerOpen) {
@@ -292,14 +298,31 @@ fun CalendarScreen(
             occurrence = s.occurrence,
             controller = controller,
             calendars = state.calendarsById,
-            onEdit = { stored -> sheet = Sheet.Editor(stored.draft, stored) },
+            onEdit = { stored, reach ->
+                val at = s.occurrence.ref()
+                sheet = when (reach) {
+                    // The whole series opens as it is stored: its first date and its rule.
+                    null, EditScope.ALL -> Sheet.Editor(stored.draft, stored, reach, at)
+                    EditScope.THIS -> Sheet.Editor(occurrenceDraft(stored.draft, at).copy(recurrence = null), stored, reach, at)
+                    EditScope.FOLLOWING -> Sheet.Editor(occurrenceDraft(stored.draft, at), stored, reach, at)
+                }
+            },
+            onDuplicate = { stored ->
+                val copy = occurrenceDraft(stored.draft, s.occurrence.ref()).copy(id = null, recurrence = null, keepExistingRule = false)
+                sheet = Sheet.Editor(copy, null)
+            },
             onDismiss = { sheet = Sheet.None },
         )
         is Sheet.Editor -> EventEditorSheet(
             initial = s.draft,
             stored = s.stored,
             calendars = state.calendars.filter { it.writable && !it.isHoliday },
-            onSave = { d -> controller.save(d); sheet = Sheet.None },
+            scope = s.scope,
+            onSave = { d ->
+                val at = s.at
+                if (at != null && s.scope != null && s.scope != EditScope.ALL) controller.saveOccurrence(d, at, s.scope) else controller.save(d)
+                sheet = Sheet.None
+            },
             onDismiss = { sheet = Sheet.None },
         )
         Sheet.Calendars -> CalendarsSheet(
@@ -441,6 +464,42 @@ private fun Modifier.graphicsFlip(): Modifier = this.graphicsLayer { scaleX = -1
 private fun BarIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
     Box(Modifier.size(OloLayout.TouchTarget).clickable(onClick = onClick).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(OloLayout.IconSize))
+    }
+}
+
+/** "‘회의’를 삭제했습니다 · 실행 취소" for [UNDO_MILLIS], above the quick-add line. */
+@Composable
+private fun UndoBar(pending: PendingDelete?, onUndo: () -> Unit, modifier: Modifier) {
+    var last by remember { mutableStateOf(pending) }
+    if (pending != null) last = pending
+    AnimatedVisibility(
+        visible = pending != null,
+        enter = slideInVertically(tween(OloMotion.Medium, easing = OloMotion.EmphasizedDecelerate)) { it } + fadeIn(tween(OloMotion.Medium)),
+        exit = slideOutVertically(tween(OloMotion.Quick)) { it } + fadeOut(tween(OloMotion.Quick)),
+        modifier = modifier,
+    ) {
+        val p = last ?: return@AnimatedVisibility
+        Surface(
+            color = MaterialTheme.colorScheme.inverseSurface,
+            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+            shape = MaterialTheme.shapes.small,
+            shadowElevation = 4.dp,
+            modifier = Modifier.widthIn(max = 460.dp).fillMaxWidth().padding(horizontal = 16.dp),
+        ) {
+            Row(Modifier.padding(start = 14.dp, end = 4.dp).height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                val what = "‘${p.title.ifBlank { "(제목 없음)" }}’".eulReul()
+                val reach = when (p.scope) {
+                    EditScope.THIS -> " (이 일정만)"
+                    EditScope.FOLLOWING -> " (이후 일정 포함)"
+                    EditScope.ALL -> ""
+                }
+                Text("$what 삭제했습니다$reach", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 2)
+                Text(
+                    "실행 취소", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.inversePrimary,
+                    modifier = Modifier.clickable(onClick = onUndo).padding(horizontal = 10.dp, vertical = 12.dp),
+                )
+            }
+        }
     }
 }
 

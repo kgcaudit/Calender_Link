@@ -36,6 +36,22 @@ interface CalendarStore {
 
     suspend fun delete(id: String)
 
+    /**
+     * Saves [draft] for one occurrence of a repeating event and [scope] of it
+     * (docs/10): THIS adds a changed occurrence, FOLLOWING ends the series before
+     * [at] and starts a new one from [draft], ALL edits the series. Returns the id
+     * the edit landed on. A store without repeat support saves the series.
+     */
+    suspend fun saveOccurrence(draft: EventDraft, at: app.olo.calendar.model.OccurrenceRef, scope: app.olo.calendar.model.EditScope): String =
+        save(draft.copy(id = at.seriesId))
+
+    /**
+     * Deletes [scope] of a repeating event from occurrence [at]: THIS cancels that
+     * one, FOLLOWING ends the series before it, ALL deletes the series.
+     */
+    suspend fun deleteOccurrence(at: app.olo.calendar.model.OccurrenceRef, scope: app.olo.calendar.model.EditScope) =
+        delete(if (scope == app.olo.calendar.model.EditScope.THIS) at.eventId else at.seriesId)
+
     suspend fun setVisible(calendarId: String, visible: Boolean)
 
     suspend fun syncStatus(): SyncStatus

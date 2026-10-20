@@ -17,7 +17,12 @@ import android.provider.CalendarContract.Instances
 import android.provider.CalendarContract.Reminders
 import app.olo.calendar.model.AllDay
 import app.olo.calendar.model.CalendarInfo
+import app.olo.calendar.model.EditScope
 import app.olo.calendar.model.EventDraft
+import app.olo.calendar.model.OccurrenceRef
+import app.olo.calendar.model.ruleCount
+import app.olo.calendar.model.ruleEndingBefore
+import app.olo.calendar.model.ruleWithCount
 import app.olo.calendar.model.MovePlan
 import app.olo.calendar.model.MoveResult
 import app.olo.calendar.model.mergeExdates
@@ -273,6 +278,113 @@ class AndroidCalendarStore(context: Context) : CalendarStore {
             if (reminders(id).sorted() != draft.reminderMinutes.sorted()) writeReminders(id, draft.reminderMinutes)
             id.toString()
         }
+    }
+
+    override suspend fun saveOccurrence(draft: EventDraft, at: OccurrenceRef, scope: EditScope): String {
+        val masterId = at.seriesId.toLong()
+        val master = io { readRow(masterId) } ?: error("event ${at.seriesId} no longer exists")
+        val rule = master[Events.RRULE] as String?
+        val atMillis = at.begin.toEpochMilliseconds()
+        // A changed occurrence is its own row: it is edited as itself, whatever the scope.
+        if (at.isException || rule == null) return save(draft.copy(id = at.eventId))
+        if (scope == EditScope.ALL || (scope == EditScope.FOLLOWING && atMillis <= (master[Events.DTSTART] as Long))) {
+            return save(draft.copy(id = at.seriesId))
+        }
+        return io { when (scope) {
+            EditScope.THIS -> {
+                // A changed occurrence of the series (CalendarContract's exception URI).
+                val w = eventColumns(draft.copy(recurrence = null, keepExistingRule = false))
+                val v = ContentValues().apply {
+                    listOf(Events.TITLE, Events.EVENT_LOCATION, Events.DESCRIPTION, Events.ALL_DAY, Events.DTSTART, Events.DTEND, Events.EVENT_TIMEZONE)
+                        .forEach { k -> putAny(k, w[k]) }
+                    put(Events.ORIGINAL_INSTANCE_TIME, atMillis)
+                    put(Events.ORIGINAL_ALL_DAY, if (at.allDay) 1 else 0)
+                    put(Events.STATUS, Events.STATUS_CONFIRMED)
+                }
+                val id = resolver.insert(ContentUris.withAppendedId(Events.CONTENT_EXCEPTION_URI, masterId), v)
+                    ?.let(ContentUris::parseId) ?: error("휴대폰 캘린더가 이 일정만 바꾸기를 받지 않았습니다")
+                writeReminders(id, draft.reminderMinutes)
+                id.toString()
+            }
+            else -> {
+                // From this one on: the series stops before it and a new one starts with the edit.
+                val prior = occurrencesBefore(masterId, master[Events.DTSTART] as Long, atMillis)
+                endSeriesBefore(masterId, rule, atMillis, at.allDay)
+                val keepRaw = draft.keepExistingRule
+                val values = ContentValues().apply {
+                    eventColumns(draft.copy(id = null, keepExistingRule = false, recurrence = if (keepRaw) null else draft.recurrence))
+                        .forEach { (k, v) -> putAny(k, v) }
+                    // Rule left as it was: carry it on, an "N times" rule for the times still to come.
+                    val next = when {
+                        keepRaw -> rule
+                        else -> getAsString(Events.RRULE)
+                    }
+                    if (next != null) {
+                        val count = ruleCount(next)
+                        put(Events.RRULE, if (count != null && (keepRaw || ruleCount(rule) == count)) ruleWithCount(next, count - prior) else next)
+                        if (keepRaw) {
+                            put(Events.DURATION, master[Events.DURATION] as String? ?: "P3600S")
+                            putNull(Events.DTEND)
+                        }
+                    }
+                }
+                insertWithReminders(values, draft.reminderMinutes).toString()
+            }
+        } }
+    }
+
+    override suspend fun deleteOccurrence(at: OccurrenceRef, scope: EditScope) {
+        io {
+            val masterId = at.seriesId.toLong()
+            val master = readRow(masterId)
+            val rule = master?.get(Events.RRULE) as String?
+            val atMillis = at.begin.toEpochMilliseconds()
+            when {
+                master == null -> Unit
+                // A changed occurrence is cancelled, not deleted: deleting its row would bring the original back.
+                at.isException && scope == EditScope.THIS -> resolver.update(
+                    ContentUris.withAppendedId(Events.CONTENT_URI, at.eventId.toLong()),
+                    ContentValues().apply { put(Events.STATUS, Events.STATUS_CANCELED) }, null, null,
+                )
+                rule == null || scope == EditScope.ALL ||
+                    (scope == EditScope.FOLLOWING && atMillis <= (master[Events.DTSTART] as Long)) ->
+                    resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, masterId), null, null)
+                scope == EditScope.THIS -> resolver.insert(
+                    ContentUris.withAppendedId(Events.CONTENT_EXCEPTION_URI, masterId),
+                    ContentValues().apply {
+                        put(Events.ORIGINAL_INSTANCE_TIME, atMillis)
+                        put(Events.ORIGINAL_ALL_DAY, if (at.allDay) 1 else 0)
+                        put(Events.STATUS, Events.STATUS_CANCELED)
+                    },
+                ) ?: error("휴대폰 캘린더가 이 일정만 삭제하기를 받지 않았습니다")
+                else -> endSeriesBefore(masterId, rule, atMillis, at.allDay)
+            }
+        }
+    }
+
+    /** Ends series [masterId] just before [atMillis], and drops its changed occurrences from there on. */
+    private fun endSeriesBefore(masterId: Long, rule: String, atMillis: Long, allDay: Boolean) {
+        val n = resolver.update(
+            ContentUris.withAppendedId(Events.CONTENT_URI, masterId),
+            ContentValues().apply { put(Events.RRULE, ruleEndingBefore(rule, atMillis, allDay)) }, null, null,
+        )
+        if (n == 0) error("휴대폰 캘린더가 반복 끝내기를 받지 않았습니다")
+        resolver.delete(
+            Events.CONTENT_URI, "${Events.ORIGINAL_ID} = ? AND ${Events.ORIGINAL_INSTANCE_TIME} >= ?",
+            arrayOf(masterId.toString(), atMillis.toString()),
+        )
+    }
+
+    /** How many occurrences series [masterId] has before [atMillis] (to carry an "N times" rule on). */
+    private fun occurrencesBefore(masterId: Long, dtStart: Long, atMillis: Long): Int {
+        val uri = Instances.CONTENT_URI.buildUpon().also {
+            ContentUris.appendId(it, dtStart - 86_400_000L)
+            ContentUris.appendId(it, atMillis)
+        }.build()
+        return runCatching {
+            resolver.query(uri, arrayOf(Instances.BEGIN), "${Instances.EVENT_ID} = ? AND ${Instances.BEGIN} < ?", arrayOf(masterId.toString(), atMillis.toString()), null)
+                ?.use { it.count } ?: 0
+        }.getOrDefault(0)
     }
 
     /** Inserts an event and its reminders as one step: if the reminders fail, the event goes too. */
