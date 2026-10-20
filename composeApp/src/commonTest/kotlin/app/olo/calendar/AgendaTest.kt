@@ -7,6 +7,10 @@ import app.olo.calendar.model.SyncKind
 import app.olo.calendar.model.at
 import app.olo.calendar.model.shownOccurrences
 import app.olo.calendar.model.widgetAgenda
+import app.olo.calendar.model.nextUp
+import app.olo.calendar.model.untilKo
+import app.olo.calendar.model.loadSettings
+import app.olo.calendar.model.saveSettings
 import app.olo.calendar.store.BridgeReport
 import app.olo.calendar.store.bridgeStatusLine
 import kotlinx.datetime.DateTimeUnit
@@ -76,5 +80,30 @@ class AgendaTest {
         assertEquals("연동 3분 전 · 문제 없음" to false, bridgeStatusLine(true, ok, false, now))
         assertEquals(true, bridgeStatusLine(true, ok.copy(failed = 1), false, now)?.second)
         assertEquals(true, bridgeStatusLine(true, ok, true, now)?.second)
+    }
+
+    @Test
+    fun smallWidgetShowsWhatIsOnNowOrNext() {
+        val now = today.at(LocalTime(13, 35), zone)
+        val meeting = timed("보고", today, 13, 14)
+        val dinner = timed("저녁", today, 19, 20)
+        val trip = allDay("출장", today, today)
+        assertEquals("보고", nextUp(listOf(dinner, meeting, trip), emptySet(), today, now)?.title)
+        assertEquals("진행 중", untilKo(meeting, now, today, zone))
+        assertEquals("5시간 후", untilKo(dinner, now, today, zone))
+        assertEquals("25분 후", untilKo(timed("회의", today, 14, 15), today.at(LocalTime(13, 35), zone), today, zone))
+        assertEquals("내일", untilKo(timed("치과", today.plus(1, DateTimeUnit.DAY), 10, 11), now, today, zone))
+        // Nothing timed ahead: today's all-day event; nothing at all: null.
+        assertEquals("출장", nextUp(listOf(trip), emptySet(), today, now)?.title)
+        assertEquals("오늘 종일", untilKo(trip, now, today, zone))
+        assertNull(nextUp(listOf(timed("아침", today, 9, 10)), emptySet(), today, now))
+    }
+
+    @Test
+    fun widgetBackgroundIsKept() {
+        val p = app.olo.calendar.model.MemoryPreferences()
+        val s = AppSettings(widgetBackground = app.olo.calendar.model.WidgetBackground.HALF)
+        p.saveSettings(s)
+        assertEquals(app.olo.calendar.model.WidgetBackground.HALF, p.loadSettings().widgetBackground)
     }
 }

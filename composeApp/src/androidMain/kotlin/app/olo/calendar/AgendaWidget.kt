@@ -47,6 +47,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import app.olo.calendar.model.AgendaDay
 import app.olo.calendar.model.AppSettings
+import app.olo.calendar.model.WidgetBackground
 import app.olo.calendar.model.Occurrence
 import app.olo.calendar.model.WIDGET_DAYS
 import app.olo.calendar.model.isShown
@@ -125,19 +126,21 @@ object Widgets {
     /** Whether any OLO widget is on a home screen. */
     suspend fun any(context: Context): Boolean = runCatching {
         val m = GlanceAppWidgetManager(context)
-        m.getGlanceIds(AgendaWidget::class.java).isNotEmpty() || m.getGlanceIds(MonthWidget::class.java).isNotEmpty()
+        listOf(AgendaWidget::class.java, MonthWidget::class.java, NextWidget::class.java).any { m.getGlanceIds(it).isNotEmpty() }
     }.getOrDefault(false)
 
     /** Redraws every OLO widget now (from a worker). */
     suspend fun updateAll(context: Context) {
         AgendaWidget().updateAll(context)
         MonthWidget().updateAll(context)
+        NextWidget().updateAll(context)
     }
 
     /** A kind of widget left the home screen: stop its schedules if no OLO widget remains. */
     fun lastOneRemoved(context: Context) {
         if (anyPlaced(context)) return
         WorkManager.getInstance(context).cancelUniqueWork(TICK)
+        context.getSharedPreferences("olo_widgets", Context.MODE_PRIVATE).edit().remove("nextTick").apply()
         if (!AndroidPreferences(context).loadSettings().bridgeOn) BridgeScheduler.cancel(context)
     }
 
@@ -148,14 +151,20 @@ object Widgets {
     }
 
     /** Receiver classes, for the platform's widget lists. */
-    val receivers = listOf(AgendaWidgetReceiver::class.java, MonthWidgetReceiver::class.java)
+    val receivers = listOf(AgendaWidgetReceiver::class.java, MonthWidgetReceiver::class.java, NextWidgetReceiver::class.java)
 
     /**
      * The next redraw nobody announces: midnight (a new day heads the list) or
      * when today's next event ends (it leaves the list), at most every 5 minutes.
      */
     fun scheduleTick(context: Context, atMillis: Long) {
-        val delay = (atMillis - System.currentTimeMillis()).coerceAtLeast(TimeUnit.MINUTES.toMillis(5))
+        // Several widgets ask: the earliest still ahead wins, so none waits past its moment.
+        val sp = context.getSharedPreferences("olo_widgets", Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val pending = sp.getLong("nextTick", 0L)
+        if (pending > now && pending <= atMillis) return
+        sp.edit().putLong("nextTick", atMillis).apply()
+        val delay = (atMillis - now).coerceAtLeast(TimeUnit.MINUTES.toMillis(5))
         WorkManager.getInstance(context).enqueueUniqueWork(
             TICK, ExistingWorkPolicy.REPLACE,
             OneTimeWorkRequestBuilder<WidgetWorker>().setInitialDelay(delay, TimeUnit.MILLISECONDS).build(),
@@ -178,6 +187,7 @@ private class WidgetData(
     val use24: Boolean,
     val zone: TimeZone,
     val nextTickMillis: Long,
+    val background: WidgetBackground = WidgetBackground.SOLID,
 )
 
 /** What every OLO widget reads: the app's settings and the events it would show for [from]–[to) (days). */
@@ -219,11 +229,15 @@ private suspend fun loadWidgetData(context: Context): WidgetData {
     val days = widgetAgenda(src.shown, src.holidayCalendars, today, now)
     // Today's next ending, so a finished event leaves the list when it ends.
     val nextEnd = days.firstOrNull()?.items?.filter { !it.allDay && it.end > now }?.minOfOrNull { it.end.toEpochMilliseconds() }
-    return WidgetData(true, today, days, src.status, use24, zone, minOf(midnight, nextEnd ?: midnight))
+    return WidgetData(true, today, days, src.status, use24, zone, minOf(midnight, nextEnd ?: midnight), src.settings.widgetBackground)
 }
 
 // OLO's tokens (design/Theme.kt), light and dark.
 internal val Bg = ColorProvider(day = Color(0xFFFBF9F5), night = Color(0xFF1C1A16))
+
+/** The widget's card, as see-through as the person chose (설정 > 위젯 > 배경). */
+internal fun widgetBg(b: WidgetBackground) =
+    if (b == WidgetBackground.SOLID) Bg else ColorProvider(day = Color(0xFFFBF9F5).copy(alpha = b.alpha), night = Color(0xFF1C1A16).copy(alpha = b.alpha))
 internal val OnBg = ColorProvider(day = Color(0xFF1D1A16), night = Color(0xFFE8E3DA))
 internal val Muted = ColorProvider(day = Color(0xFF574D45), night = Color(0xFFCFC5B9))
 internal val Clay = ColorProvider(day = Color(0xFFB95B3B), night = Color(0xFFE8A183))
@@ -254,7 +268,7 @@ private fun Content(context: Context, d: WidgetData) {
     val size = LocalSize.current
     val wide = size.width >= AgendaWidget.WIDE.width
     val tall = size.height >= AgendaWidget.TALL.height
-    Column(GlanceModifier.fillMaxSize().background(Bg).cornerRadius(20.dp).padding(horizontal = 14.dp, vertical = 10.dp)) {
+    Column(GlanceModifier.fillMaxSize().background(widgetBg(d.background)).cornerRadius(20.dp).padding(horizontal = 14.dp, vertical = 10.dp)) {
         Header(context, d.today)
         if (!d.granted) {
             Text(

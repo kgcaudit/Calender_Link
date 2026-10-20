@@ -381,6 +381,12 @@ fun SettingsSheet(
             SettingSwitch("주 번호", "월 보기 왼쪽에 표시", st.showWeekNumbers) { v -> onChange { it.copy(showWeekNumbers = v) } }
             SettingSwitch("달을 위아래로 넘기기", "폴드를 펼쳤을 때만", st.verticalPagingWide) { v -> onChange { it.copy(verticalPagingWide = v) } }
 
+            SettingGroup("위젯")
+            SettingRow("배경") {
+                SegmentedChoice(
+                    app.olo.calendar.model.WidgetBackground.entries.map { it to it.label }, st.widgetBackground,
+                ) { b -> onChange { it.copy(widgetBackground = b) } }
+            }
             SettingGroup("새 일정")
             val chosen = state.calendars.firstOrNull { it.id == st.defaultCalendarId && it.writable && !it.isHoliday }
             SettingRow(

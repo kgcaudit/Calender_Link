@@ -507,7 +507,8 @@ class CalendarController(
         }
         if (next.weekStart != before.weekStart) reload()
         if (next.visibility != before.visibility || next.hues != before.hues || next.bridgeSamsungId != before.bridgeSamsungId ||
-            next.bridgeGoogleId != before.bridgeGoogleId || next.bridgeOn != before.bridgeOn) onChanged()
+            next.bridgeGoogleId != before.bridgeGoogleId || next.weekStart != before.weekStart || next.showLunar != before.showLunar ||
+            next.widgetBackground != before.widgetBackground) onChanged()
     }
 
     suspend fun load(id: String): StoredEvent? = store.event(id)

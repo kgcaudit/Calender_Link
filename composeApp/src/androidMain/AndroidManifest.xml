@@ -58,6 +58,19 @@
                 android:resource="@xml/olo_month_widget" />
         </receiver>
 
+        <!-- Home-screen next-event widget (docs/09 W3). -->
+        <receiver
+            android:name=".NextWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_next_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/olo_next_widget" />
+        </receiver>
+
         <!-- A new time zone or a clock set by hand changes the widget's days. -->
         <receiver
             android:name=".WidgetClockReceiver"

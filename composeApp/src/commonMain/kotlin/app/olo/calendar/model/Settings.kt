@@ -5,6 +5,11 @@ import kotlinx.datetime.DayOfWeek
 /** The calendar views, as Samsung Calendar offers them. */
 enum class ViewMode(val label: String) { YEAR("년"), MONTH("월"), WEEK("주"), DAY("일"), AGENDA("일정") }
 
+/** How much of the wallpaper shows through OLO's widgets (docs/09 §6), as Samsung's widgets offer. */
+enum class WidgetBackground(val label: String, val alpha: Float) {
+    SOLID("불투명", 1f), HALF("반투명", 0.6f), CLEAR("투명", 0f),
+}
+
 /** OLO's own preferences. Everything about events lives in the phone's calendar store, not here. */
 data class AppSettings(
     val weekStart: DayOfWeek = DayOfWeek.SUNDAY,
@@ -32,6 +37,7 @@ data class AppSettings(
      * OLO-only: the phone's own automatic sync of them goes on.
      */
     val syncExcluded: Set<String> = emptySet(),
+    val widgetBackground: WidgetBackground = WidgetBackground.SOLID,
 ) {
     val bridgeOn: Boolean get() = bridgeSamsungId != null && bridgeGoogleId != null
 }
@@ -66,6 +72,7 @@ fun Preferences.loadSettings(): AppSettings {
         bridgeSamsungId = get("bridgeSamsungId"),
         bridgeGoogleId = get("bridgeGoogleId"),
         syncExcluded = get("syncExcluded").orEmpty().split('\n').filter { it.isNotBlank() }.toSet(),
+        widgetBackground = get("widgetBackground")?.let { v -> WidgetBackground.entries.firstOrNull { it.name == v } } ?: d.widgetBackground,
     )
 }
 
@@ -83,4 +90,5 @@ fun Preferences.saveSettings(s: AppSettings) {
     put("bridgeSamsungId", s.bridgeSamsungId)
     put("bridgeGoogleId", s.bridgeGoogleId)
     put("syncExcluded", s.syncExcluded.joinToString("\n").ifEmpty { null })
+    put("widgetBackground", s.widgetBackground.name)
 }

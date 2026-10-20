@@ -50,6 +50,7 @@ import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import app.olo.calendar.model.MonthCell
+import app.olo.calendar.model.WidgetBackground
 import app.olo.calendar.model.Occurrence
 import app.olo.calendar.model.YearMonth
 import app.olo.calendar.model.koShort
@@ -156,6 +157,7 @@ private class MonthData(
     val use24: Boolean,
     val zone: TimeZone,
     val nextTickMillis: Long,
+    val background: WidgetBackground = WidgetBackground.SOLID,
 )
 
 private suspend fun loadMonthData(context: Context, offset: Int): MonthData {
@@ -176,7 +178,7 @@ private suspend fun loadMonthData(context: Context, offset: Int): MonthData {
     val weeks = monthWidgetWeeks(month, src.settings.weekStart, src.shown, src.holidayCalendars, today, src.settings.showLunar)
     val todayEvents = src.shown.on(today).filter { it.calendarId !in src.holidayCalendars && (it.allDay || it.end > now) }.sortedForDay()
     val nextEnd = todayEvents.filter { !it.allDay }.minOfOrNull { it.end.toEpochMilliseconds() }
-    return MonthData(offset, true, month, today, src.settings.weekStart, weeks, todayEvents, src.status, use24, zone, minOf(midnight, nextEnd ?: midnight))
+    return MonthData(offset, true, month, today, src.settings.weekStart, weeks, todayEvents, src.status, use24, zone, minOf(midnight, nextEnd ?: midnight), src.settings.widgetBackground)
 }
 
 private val TodayFill = ColorProvider(day = Color(0xFFB95B3B), night = Color(0xFFE8A183))
@@ -188,7 +190,7 @@ private fun MonthContent(context: Context, d: MonthData) {
     val size = LocalSize.current
     val tall = size.height >= MonthWidget.TALL.height
     val roomy = size.height >= MonthWidget.FULL.height
-    Column(GlanceModifier.fillMaxSize().background(Bg).cornerRadius(20.dp).padding(horizontal = 10.dp, vertical = 8.dp)) {
+    Column(GlanceModifier.fillMaxSize().background(widgetBg(d.background)).cornerRadius(20.dp).padding(horizontal = 10.dp, vertical = 8.dp)) {
         MonthHeader(context, d)
         if (!d.granted) {
             Text(
