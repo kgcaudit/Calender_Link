@@ -1,8 +1,6 @@
 package app.olo.calendar
 
 import android.Manifest
-import android.appwidget.AppWidgetManager
-import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.CalendarContract
@@ -14,7 +12,6 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import androidx.glance.appwidget.updateAll
 import app.olo.calendar.model.loadSettings
 import app.olo.calendar.store.BridgeConfig
 import app.olo.calendar.store.BridgeEngine
@@ -58,9 +55,7 @@ object BridgeScheduler {
     fun cancel(context: Context) {
         val wm = WorkManager.getInstance(context)
         wm.cancelUniqueWork(PERIODIC)
-        val widgets = AppWidgetManager.getInstance(context)
-            .getAppWidgetIds(ComponentName(context, AgendaWidgetReceiver::class.java)).isNotEmpty()
-        if (!widgets) wm.cancelUniqueWork(ON_CHANGE)
+        if (!Widgets.anyPlaced(context)) wm.cancelUniqueWork(ON_CHANGE)
     }
 }
 
@@ -81,7 +76,7 @@ class BridgeWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             return Result.success()
         }
         // The same change redraws the widgets (docs/09 §5), after the bridge has had its say.
-        if (widgets) AgendaWidget().updateAll(ctx)
+        if (widgets) Widgets.updateAll(ctx)
         // A content-triggered job runs once; arm the next one (our own writes settle in one pass).
         // Appended behind this run, which REPLACE would cancel. A failed pass is not retried
         // here: the next change or the periodic job runs it again.

@@ -2,4 +2,6 @@
 <resources>
     <string name="widget_agenda_label">OLO 일정</string>
     <string name="widget_agenda_description">오늘부터 2주 동안의 일정과 연동 상태</string>
+    <string name="widget_month_label">OLO 월 달력</string>
+    <string name="widget_month_description">이번 달 달력과 일정 점, 위젯에서 달 넘기기</string>
 </resources>

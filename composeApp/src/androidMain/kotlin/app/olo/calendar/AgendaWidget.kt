@@ -46,6 +46,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import app.olo.calendar.model.AgendaDay
+import app.olo.calendar.model.AppSettings
 import app.olo.calendar.model.Occurrence
 import app.olo.calendar.model.WIDGET_DAYS
 import app.olo.calendar.model.isShown
@@ -101,8 +102,7 @@ class AgendaWidgetReceiver : GlanceAppWidgetReceiver() {
 
     override fun onDisabled(context: Context) {
         super.onDisabled(context)
-        WorkManager.getInstance(context).cancelUniqueWork(Widgets.TICK)
-        if (!AndroidPreferences(context).loadSettings().bridgeOn) BridgeScheduler.cancel(context)
+        Widgets.lastOneRemoved(context)
     }
 }
 
@@ -123,8 +123,32 @@ object Widgets {
     }
 
     /** Whether any OLO widget is on a home screen. */
-    suspend fun any(context: Context): Boolean =
-        runCatching { GlanceAppWidgetManager(context).getGlanceIds(AgendaWidget::class.java).isNotEmpty() }.getOrDefault(false)
+    suspend fun any(context: Context): Boolean = runCatching {
+        val m = GlanceAppWidgetManager(context)
+        m.getGlanceIds(AgendaWidget::class.java).isNotEmpty() || m.getGlanceIds(MonthWidget::class.java).isNotEmpty()
+    }.getOrDefault(false)
+
+    /** Redraws every OLO widget now (from a worker). */
+    suspend fun updateAll(context: Context) {
+        AgendaWidget().updateAll(context)
+        MonthWidget().updateAll(context)
+    }
+
+    /** A kind of widget left the home screen: stop its schedules if no OLO widget remains. */
+    fun lastOneRemoved(context: Context) {
+        if (anyPlaced(context)) return
+        WorkManager.getInstance(context).cancelUniqueWork(TICK)
+        if (!AndroidPreferences(context).loadSettings().bridgeOn) BridgeScheduler.cancel(context)
+    }
+
+    /** Without suspending: whether any OLO widget is placed. */
+    fun anyPlaced(context: Context): Boolean {
+        val m = android.appwidget.AppWidgetManager.getInstance(context)
+        return receivers.any { m.getAppWidgetIds(android.content.ComponentName(context, it)).isNotEmpty() }
+    }
+
+    /** Receiver classes, for the platform's widget lists. */
+    val receivers = listOf(AgendaWidgetReceiver::class.java, MonthWidgetReceiver::class.java)
 
     /**
      * The next redraw nobody announces: midnight (a new day heads the list) or
@@ -141,7 +165,7 @@ object Widgets {
 
 class WidgetWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        AgendaWidget().updateAll(applicationContext)
+        Widgets.updateAll(applicationContext)
         return Result.success()
     }
 }
@@ -156,44 +180,59 @@ private class WidgetData(
     val nextTickMillis: Long,
 )
 
-private suspend fun loadWidgetData(context: Context): WidgetData {
-    val zone = TimeZone.currentSystemDefault()
-    val now = Clock.System.now()
-    val today = now.toLocalDateTime(zone).date
-    val midnight = today.plus(1, DateTimeUnit.DAY).atStartOfDayIn(zone).toEpochMilliseconds()
-    val use24 = android.text.format.DateFormat.is24HourFormat(context)
-    val granted = context.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
-    if (!granted) return WidgetData(false, today, emptyList(), null, use24, zone, midnight)
+/** What every OLO widget reads: the app's settings and the events it would show for [from]–[to) (days). */
+internal class WidgetSource(
+    val settings: AppSettings,
+    val shown: List<Occurrence>,
+    val holidayCalendars: Set<String>,
+    val status: Pair<String, Boolean>?,
+)
+
+internal suspend fun readWidgetSource(context: Context, from: LocalDate, to: LocalDate, zone: TimeZone, now: kotlinx.datetime.Instant): WidgetSource {
     val prefs = AndroidPreferences(context)
     val settings = prefs.loadSettings()
     val store = AndroidCalendarStore(context)
     val bridge = BridgeEngine(store, prefs)
     val calendars = runCatching { store.calendars() }.getOrDefault(emptyList())
-    val all = runCatching {
-        store.occurrences(today.atStartOfDayIn(zone), today.plus(WIDGET_DAYS, DateTimeUnit.DAY).atStartOfDayIn(zone))
-    }.getOrDefault(emptyList())
+    val all = runCatching { store.occurrences(from.atStartOfDayIn(zone), to.atStartOfDayIn(zone)) }.getOrDefault(emptyList())
     val shown = shownOccurrences(all, calendars, settings, bridge.linkedGoogleIds())
     val holidayCalendars = calendars.filter { it.isHoliday && settings.isShown(it) }.map { it.id }.toSet()
-    val days = widgetAgenda(shown, holidayCalendars, today, now)
     val googleAccount = calendars.firstOrNull { it.id == settings.bridgeGoogleId }?.accountName
     val syncOff = googleAccount != null && runCatching { store.syncStatus() }.getOrNull()?.let { googleAccount in it.accountsWithSyncOff } == true
     val status = bridgeStatusLine(settings.bridgeOn, bridge.lastReport, syncOff, now.toEpochMilliseconds())
+    return WidgetSource(settings, shown, holidayCalendars, status)
+}
+
+internal fun calendarGranted(context: Context) =
+    context.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+
+internal fun nextMidnight(today: LocalDate, zone: TimeZone) = today.plus(1, DateTimeUnit.DAY).atStartOfDayIn(zone).toEpochMilliseconds()
+
+private suspend fun loadWidgetData(context: Context): WidgetData {
+    val zone = TimeZone.currentSystemDefault()
+    val now = Clock.System.now()
+    val today = now.toLocalDateTime(zone).date
+    val midnight = nextMidnight(today, zone)
+    val use24 = android.text.format.DateFormat.is24HourFormat(context)
+    if (!calendarGranted(context)) return WidgetData(false, today, emptyList(), null, use24, zone, midnight)
+    val src = readWidgetSource(context, today, today.plus(WIDGET_DAYS, DateTimeUnit.DAY), zone, now)
+    val days = widgetAgenda(src.shown, src.holidayCalendars, today, now)
     // Today's next ending, so a finished event leaves the list when it ends.
     val nextEnd = days.firstOrNull()?.items?.filter { !it.allDay && it.end > now }?.minOfOrNull { it.end.toEpochMilliseconds() }
-    return WidgetData(true, today, days, status, use24, zone, minOf(midnight, nextEnd ?: midnight))
+    return WidgetData(true, today, days, src.status, use24, zone, minOf(midnight, nextEnd ?: midnight))
 }
 
 // OLO's tokens (design/Theme.kt), light and dark.
-private val Bg = ColorProvider(day = Color(0xFFFBF9F5), night = Color(0xFF1C1A16))
-private val OnBg = ColorProvider(day = Color(0xFF1D1A16), night = Color(0xFFE8E3DA))
-private val Muted = ColorProvider(day = Color(0xFF574D45), night = Color(0xFFCFC5B9))
-private val Clay = ColorProvider(day = Color(0xFFB95B3B), night = Color(0xFFE8A183))
-private val OnClay = ColorProvider(day = Color.White, night = Color(0xFF4A1E0C))
-private val Holiday = ColorProvider(day = Color(0xFFA50E2E), night = Color(0xFFFFB0BE))
-private val Ok = ColorProvider(day = Color(0xFF2F6B4F), night = Color(0xFF8FD1AE))
-private val Divider = ColorProvider(day = Color(0xFFE7E1D6), night = Color(0xFF2E2A25))
+internal val Bg = ColorProvider(day = Color(0xFFFBF9F5), night = Color(0xFF1C1A16))
+internal val OnBg = ColorProvider(day = Color(0xFF1D1A16), night = Color(0xFFE8E3DA))
+internal val Muted = ColorProvider(day = Color(0xFF574D45), night = Color(0xFFCFC5B9))
+internal val Clay = ColorProvider(day = Color(0xFFB95B3B), night = Color(0xFFE8A183))
+internal val OnClay = ColorProvider(day = Color.White, night = Color(0xFF4A1E0C))
+internal val Holiday = ColorProvider(day = Color(0xFFA50E2E), night = Color(0xFFFFB0BE))
+internal val Ok = ColorProvider(day = Color(0xFF2F6B4F), night = Color(0xFF8FD1AE))
+internal val Divider = ColorProvider(day = Color(0xFFE7E1D6), night = Color(0xFF2E2A25))
 
-private fun open(context: Context, r: OpenRequest) = actionStartActivity(openIntent(context, r))
+internal fun open(context: Context, r: OpenRequest) = actionStartActivity(openIntent(context, r))
 
 /** The intent MainActivity reads back into an [OpenRequest] (a distinct data URI per target). */
 fun openIntent(context: Context, r: OpenRequest): Intent {
@@ -324,7 +363,7 @@ private fun RowView(context: Context, r: WRow, d: WidgetData, wide: Boolean) {
 }
 
 @Composable
-private fun StatusLine(context: Context, text: String, alert: Boolean) {
+internal fun StatusLine(context: Context, text: String, alert: Boolean) {
     Column(GlanceModifier.fillMaxWidth()) {
         Box(GlanceModifier.fillMaxWidth().height(1.dp).background(Divider)) {}
         Row(
