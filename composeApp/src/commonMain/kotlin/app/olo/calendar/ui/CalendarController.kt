@@ -57,7 +57,15 @@ import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
 
 /** A deletion waiting out its "실행 취소" moment (docs/10 §3): hidden on screen, not yet sent to the store. */
-data class PendingDelete(val ref: OccurrenceRef, val scope: EditScope, val title: String)
+data class PendingDelete(
+    val ref: OccurrenceRef,
+    val scope: EditScope,
+    val title: String,
+    /** A lunar repeat's events (docs/11): hidden by id, as each year is its own event. */
+    val ids: Set<String> = emptySet(),
+) {
+    fun hides(o: Occurrence): Boolean = if (ids.isNotEmpty()) o.eventId in ids else ref.covers(o, scope)
+}
 
 data class CalendarUiState(
     /** The deletion that can still be undone; its occurrences are already off the screen. */
@@ -202,6 +210,7 @@ class CalendarController(
     val state: StateFlow<CalendarUiState> = _state.asStateFlow()
 
     val bridge = BridgeEngine(store, prefs)
+    private val lunar = app.olo.calendar.store.LunarRepeats(store, prefs) { ids -> bridge.noteIntendedDeletes(ids) }
 
     init {
         val last = bridge.lastReport
@@ -213,6 +222,12 @@ class CalendarController(
             )
         }
         reload()
+        // Lunar repeats stay ten years ahead (docs/11 §2).
+        scope.launch {
+            // Years deleted in another app leave the repeat first, so it extends from what is really there.
+            runCatching { lunar.prune { id -> store.event(id) != null } }
+            if (runCatching { lunar.topUp(todayNow) }.getOrDefault(0) > 0) { reload(); onChanged() }
+        }
         scope.launch {
             // A burst of writes (a sync pulling many events) reloads once.
             store.changes().debounce(300).collect { reload() }
@@ -562,6 +577,19 @@ class CalendarController(
             // An edit in Samsung Calendar may come back as a new event (the provider kept the old
             // one's length): the bridge pair moves with it, under the bridge's lock so no pass sees
             // the old event gone in between, and Google gets an edit, not a delete and a copy.
+            // Every lunar year (docs/11): written as one event a year; an existing event becomes the first of them.
+            if (draft.lunarYearly) {
+                val r = runCatching {
+                    val ids = lunar.create(draft.copy(id = null))
+                    draft.id?.let { old -> bridge.noteIntendedDeletes(setOf(old)); store.delete(old) }
+                    ids.firstOrNull().orEmpty()
+                }
+                r.onFailure { e -> _state.update { it.copy(error = "저장하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
+                done(r)
+                reload()
+                onChanged()
+                return@launch
+            }
             val oldId = draft.id
             val r = runCatching {
                 if (oldId != null && draft.calendarId == _state.value.settings.bridgeSamsungId) bridge.saveBridged({ store.save(draft) }, oldId)
@@ -569,6 +597,19 @@ class CalendarController(
             }
             r.onFailure { e -> _state.update { it.copy(error = "저장하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
             done(r)
+            reload()
+            onChanged()
+        }
+    }
+
+    /** The lunar repeat [eventId] belongs to (docs/11), if any. */
+    fun lunarGroupOf(eventId: String): app.olo.calendar.model.LunarGroup? = lunar.groupOf(eventId)
+
+    /** Saves [draft], opened on [eventId] of a lunar repeat, for [reach] of it. */
+    fun saveLunar(draft: EventDraft, eventId: String, reach: EditScope) {
+        scope.launch {
+            runCatching { lunar.save(draft, eventId, reach) }
+                .onFailure { e -> _state.update { it.copy(error = "저장하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
             reload()
             onChanged()
         }
@@ -595,8 +636,9 @@ class CalendarController(
      */
     fun delete(o: Occurrence, reach: EditScope = EditScope.ALL) {
         flushPendingDelete()
-        val p = PendingDelete(o.ref(), reach, o.title)
-        _state.update { it.copy(pendingDelete = p, occurrences = it.occurrences.filterNot { x -> p.ref.covers(x, p.scope) }) }
+        val ids = lunar.groupOf(o.eventId)?.reach(o.eventId, reach).orEmpty()
+        val p = PendingDelete(o.ref(), reach, o.title, ids)
+        _state.update { it.copy(pendingDelete = p, occurrences = it.occurrences.filterNot { x -> p.hides(x) }) }
         pendingJob = scope.launch { delay(UNDO_MILLIS); commitDelete(p) }
     }
 
@@ -619,7 +661,15 @@ class CalendarController(
     private suspend fun commitDelete(p: PendingDelete) {
         if (_state.value.pendingDelete != p) return
         _state.update { it.copy(pendingDelete = null) }
-        runCatching { store.deleteOccurrence(p.ref, p.scope) }
+        // Deleted here on purpose: the bridge carries it over without its safety stop (docs/11 §3).
+        bridge.noteIntendedDeletes(
+            when {
+                p.ids.isNotEmpty() -> emptySet() // the lunar store reports its own
+                p.scope == EditScope.ALL -> setOf(p.ref.seriesId)
+                else -> emptySet()
+            },
+        )
+        runCatching { if (p.ids.isNotEmpty()) lunar.delete(p.ref.eventId, p.scope) else store.deleteOccurrence(p.ref, p.scope) }
             .onFailure { e -> _state.update { it.copy(error = "삭제하지 못했습니다." + (e.message?.let { m -> " ($m)" } ?: "")) } }
         reload()
         onChanged()
@@ -629,7 +679,7 @@ class CalendarController(
     private fun shownNow(all: List<Occurrence>, calendars: List<CalendarInfo>, settings: AppSettings, bridged: Set<String>): List<Occurrence> {
         val shown = shownOccurrences(all, calendars, settings, bridged)
         val p = _state.value.pendingDelete ?: return shown
-        return shown.filterNot { p.ref.covers(it, p.scope) }
+        return shown.filterNot { p.hides(it) }
     }
 
     /** Turns an account's calendar sync on (or back off, for undo) and reloads; [done] gets whether the OS took it. */

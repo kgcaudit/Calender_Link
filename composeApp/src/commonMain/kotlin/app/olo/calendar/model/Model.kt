@@ -81,6 +81,8 @@ data class EventDraft(
      * beyond OLO's editor, so saving other fields cannot flatten it.
      */
     val keepExistingRule: Boolean = false,
+    /** Repeat every year on this start date's lunar date (docs/11): written as one event per year. */
+    val lunarYearly: Boolean = false,
 )
 
 /** An event read back from the store, with what OLO may safely change about it. */

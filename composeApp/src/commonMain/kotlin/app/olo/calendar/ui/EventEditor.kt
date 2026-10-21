@@ -1,5 +1,7 @@
 package app.olo.calendar.ui
 
+import app.olo.calendar.model.LUNAR_YEARS
+import app.olo.calendar.model.lunarRuleOf
 import app.olo.calendar.model.EditScope
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -68,6 +70,8 @@ fun EventEditorSheet(
     calendars: List<CalendarInfo>,
     /** For one occurrence of a repeating event: how far the edit reaches (docs/10). */
     scope: EditScope? = null,
+    /** Editing a lunar repeat (docs/11): its rule is shown, not chosen again. */
+    lunarGroup: app.olo.calendar.model.LunarGroup? = null,
     onSave: (EventDraft) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -87,6 +91,7 @@ fun EventEditorSheet(
             val reachNote = when {
                 scope == EditScope.THIS -> "반복 중 이 일정만 바뀝니다."
                 scope == EditScope.FOLLOWING -> "이 일정부터 이후 일정이 바뀝니다. 지난 일정은 그대로입니다."
+                lunarGroup != null -> "음력 반복 전체가 바뀝니다."
                 seriesEdit -> "반복 일정 전체가 바뀝니다."
                 else -> null
             }
@@ -108,6 +113,13 @@ fun EventEditorSheet(
 
             if (scope == EditScope.THIS) {
                 // A changed occurrence cannot repeat on its own.
+            } else if (lunarGroup != null) {
+                Text("반복", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "음력 매년 · " + (lunarRuleOf(d.startDate) ?: lunarGroup.rule).label() +
+                        if (lunarRuleOf(d.startDate) != lunarGroup.rule) " (시작 날짜를 바꿔 새 음력 날짜로 옮깁니다)" else "",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             } else if (keepRule) {
                 Text(
                     "반복 · 다른 앱에서 만든 규칙(그대로 유지)",
@@ -115,7 +127,11 @@ fun EventEditorSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                RecurrenceEditor(d.recurrence, d.startDate, { pick = PickTarget.UNTIL }) { d = d.copy(recurrence = it) }
+                RecurrenceEditor(
+                    d.recurrence, d.startDate, d.lunarYearly, lunarAllowed = scope != EditScope.FOLLOWING,
+                    onLunar = { on -> d = d.copy(lunarYearly = on, recurrence = if (on) null else d.recurrence) },
+                    onPickUntil = { pick = PickTarget.UNTIL },
+                ) { d = d.copy(recurrence = it, lunarYearly = false) }
             }
 
             Text("알림", style = MaterialTheme.typography.labelLarge)
@@ -233,20 +249,36 @@ private fun DateTimeRow(
 private fun RecurrenceEditor(
     value: Recurrence?,
     start: LocalDate,
+    lunar: Boolean,
+    /** "From this one on" of a series keeps to rules a series can have. */
+    lunarAllowed: Boolean = true,
+    onLunar: (Boolean) -> Unit,
     onPickUntil: () -> Unit,
     onChange: (Recurrence?) -> Unit,
 ) {
     Text("반복", style = MaterialTheme.typography.labelLarge)
     val choices = listOf<Pair<String, Frequency?>>("안 함" to null, "매일" to Frequency.DAILY, "매주" to Frequency.WEEKLY, "매월" to Frequency.MONTHLY, "매년" to Frequency.YEARLY)
+    val rule = lunarRuleOf(start)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         choices.forEach { (label, f) ->
             FilterChip(
-                selected = value?.frequency == f,
+                selected = !lunar && value?.frequency == f,
                 onClick = { onChange(f?.let { Recurrence(it, end = value?.end ?: RecurrenceEnd.Never) }) },
                 label = { Text(label) },
                 shape = MaterialTheme.shapes.extraSmall,
             )
         }
+        // Lunar birthdays and memorial days (docs/11): only where the lunar table reaches.
+        if (rule != null && lunarAllowed) {
+            FilterChip(selected = lunar, onClick = { onLunar(!lunar) }, label = { Text("음력 매년") }, shape = MaterialTheme.shapes.extraSmall)
+        }
+    }
+    if (lunar && rule != null) {
+        Text(
+            "${rule.label()}마다 · ${LUNAR_YEARS}년치를 일정으로 만들고, 남은 해가 줄면 자동으로 이어 갑니다.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
     }
     if (value == null) return
     if (value.frequency == Frequency.WEEKLY) {

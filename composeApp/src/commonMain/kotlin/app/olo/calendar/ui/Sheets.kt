@@ -97,6 +97,7 @@ fun EventDetailSheet(
     var stored by remember { mutableStateOf<StoredEvent?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
     var askEdit by remember { mutableStateOf(false) }
+    val lunarGroup = remember(occurrence.eventId) { controller.lunarGroupOf(occurrence.eventId) }
     LaunchedEffect(occurrence.eventId) { stored = controller.load(occurrence.eventId) }
     val cal = calendars[occurrence.calendarId]
     // A bridged event's deletion carries to the other side and on to the iPhone: say so before it happens.
@@ -120,6 +121,7 @@ fun EventDetailSheet(
             val d = s.draft
             if (d.location.isNotBlank()) DetailLine("장소", d.location)
             when {
+                lunarGroup != null -> DetailLine("반복", "음력 매년 · ${lunarGroup.rule.label()}")
                 d.recurrence != null -> DetailLine("반복", d.recurrence.describeKo(d.startDate))
                 s.rawRule != null -> DetailLine("반복", "다른 앱에서 만든 규칙(그대로 유지)")
             }
@@ -131,7 +133,7 @@ fun EventDetailSheet(
         if (s != null && s.calendarWritable) {
             // One occurrence of a series: edits and deletions ask how far they reach.
             // A changed occurrence (an exception row) is only ever itself.
-            val series = s.rawRule != null && !s.isException
+            val series = (s.rawRule != null && !s.isException) || lunarGroup != null
             val alsoThere = if (bridged) " ${Term.GOOGLE_MAIN}와 아이폰에서도 삭제됩니다." else ""
             when {
                 confirmDelete && series -> {

@@ -101,7 +101,14 @@ private sealed interface Sheet {
     data object None : Sheet
     data class Detail(val occurrence: Occurrence) : Sheet
     /** [scope] and [at]: an edit of one occurrence of a repeating event (docs/10). */
-    data class Editor(val draft: EventDraft, val stored: StoredEvent?, val scope: EditScope? = null, val at: OccurrenceRef? = null) : Sheet
+    data class Editor(
+        val draft: EventDraft,
+        val stored: StoredEvent?,
+        val scope: EditScope? = null,
+        val at: OccurrenceRef? = null,
+        /** The tapped year of a lunar repeat (docs/11). */
+        val lunar: app.olo.calendar.model.LunarGroup? = null,
+    ) : Sheet
     data object Calendars : Sheet
     data object Sync : Sheet
     data class Move(val fromCalendarId: String) : Sheet
@@ -300,7 +307,11 @@ fun CalendarScreen(
             calendars = state.calendarsById,
             onEdit = { stored, reach ->
                 val at = s.occurrence.ref()
-                sheet = when (reach) {
+                val lunar = controller.lunarGroupOf(s.occurrence.eventId)
+                sheet = if (lunar != null) {
+                    // Each lunar year is its own event: it opens on its own date.
+                    Sheet.Editor(stored.draft.copy(lunarYearly = reach != EditScope.THIS), stored, reach ?: EditScope.ALL, at, lunar)
+                } else when (reach) {
                     // The whole series opens as it is stored: its first date and its rule.
                     null, EditScope.ALL -> Sheet.Editor(stored.draft, stored, reach, at)
                     EditScope.THIS -> Sheet.Editor(occurrenceDraft(stored.draft, at).copy(recurrence = null), stored, reach, at)
@@ -308,7 +319,7 @@ fun CalendarScreen(
                 }
             },
             onDuplicate = { stored ->
-                val copy = occurrenceDraft(stored.draft, s.occurrence.ref()).copy(id = null, recurrence = null, keepExistingRule = false)
+                val copy = occurrenceDraft(stored.draft, s.occurrence.ref()).copy(id = null, recurrence = null, keepExistingRule = false, lunarYearly = false)
                 sheet = Sheet.Editor(copy, null)
             },
             onDismiss = { sheet = Sheet.None },
@@ -318,9 +329,14 @@ fun CalendarScreen(
             stored = s.stored,
             calendars = state.calendars.filter { it.writable && !it.isHoliday },
             scope = s.scope,
+            lunarGroup = s.lunar?.takeIf { s.scope != EditScope.THIS },
             onSave = { d ->
                 val at = s.at
-                if (at != null && s.scope != null && s.scope != EditScope.ALL) controller.saveOccurrence(d, at, s.scope) else controller.save(d)
+                when {
+                    s.lunar != null && at != null -> controller.saveLunar(d, at.eventId, s.scope ?: EditScope.ALL)
+                    at != null && s.scope != null && s.scope != EditScope.ALL -> controller.saveOccurrence(d, at, s.scope)
+                    else -> controller.save(d)
+                }
                 sheet = Sheet.None
             },
             onDismiss = { sheet = Sheet.None },

@@ -85,6 +85,21 @@ class BridgeTest {
     }
 
     @Test
+    fun deletionsMadeInOloSkipTheSafetyStop() {
+        // A lunar repeat deleted in OLO is ten events at once (docs/11 §3): meant, not a loss.
+        val items = (1..10).map { item("s$it", "음력 생일", it * 1000L) }
+        val links = items.map { BridgeLink(it.id, "g" + it.id.drop(1), it.fingerprint, it.fingerprint, true, true) }
+        val google = items.map { item("g" + it.id.drop(1), it.fields.title, it.fields.startMillis) }
+        val p = planBridge(emptyList(), google, links, intended = items.map { it.id }.toSet())
+        assertEquals(10, p.ops.count { it is BridgeOp.DeleteGoogle })
+        assertTrue(p.pendingDeletes.isEmpty())
+        // Only what was meant goes; the rest still waits.
+        val mixed = planBridge(emptyList(), google, links, intended = setOf("s1"))
+        assertEquals(1, mixed.ops.count { it is BridgeOp.DeleteGoogle })
+        assertEquals(9, mixed.pendingDeletes.size)
+    }
+
+    @Test
     fun fieldsSurviveTheUndoRecord() {
         val f = item("s1", "가족 저녁\n메모", 5_000).fields.copy(exdates = listOf(1L, 2L), reminderMinutes = listOf(10, 60))
         assertEquals(f, decodeFields(encodeFields(f)))

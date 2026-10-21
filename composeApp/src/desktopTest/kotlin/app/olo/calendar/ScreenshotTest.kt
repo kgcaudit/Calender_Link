@@ -46,6 +46,30 @@ import kotlin.test.assertTrue
  */
 class ScreenshotTest {
     @Test
+    fun editorWithLunarRepeat() {
+        // docs/11: "음력 매년" chosen for a birthday on lunar 8/15.
+        val scene = ImageComposeScene(width = 1080, height = 2340, density = Density(2.625f)) {
+            OloTheme(darkTheme = false) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    app.olo.calendar.ui.EventEditorSheet(
+                        initial = EventDraft(calendarId = "16", title = "할머니 생신", allDay = true, startDate = kotlinx.datetime.LocalDate(2026, 9, 25), timeZoneId = "Asia/Seoul", lunarYearly = true),
+                        stored = null,
+                        calendars = emptyList(),
+                        onSave = {}, onDismiss = {},
+                    )
+                }
+            }
+        }
+        var img = scene.render(0)
+        for (i in 1..8) img = scene.render(i * 150_000_000L)
+        val out = File("build/screens/editor-lunar.png")
+        out.parentFile.mkdirs()
+        out.writeBytes(img.encodeToData(EncodedImageFormat.PNG)!!.bytes)
+        scene.close()
+        assertTrue(out.length() > 0)
+    }
+
+    @Test
     fun monthScreen() {
         render("month-light", dark = false)
         render("month-dark", dark = true)

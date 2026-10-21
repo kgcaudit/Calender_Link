@@ -128,6 +128,18 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
             .distinctBy { it.twinKey }
     }
 
+    /**
+     * Events the person is deleting in OLO (docs/11 §3): the next pass carries their
+     * partners over without the safety stop. Called just before the deletion.
+     */
+    fun noteIntendedDeletes(ids: Collection<String>) {
+        if (ids.isNotEmpty()) intended = intended + ids
+    }
+
+    private var intended: Set<String>
+        get() = prefs.get(KEY_INTENDED).orEmpty().split(',').filter { it.isNotBlank() }.toSet()
+        set(v) = prefs.put(KEY_INTENDED, v.toList().takeLast(500).joinToString(",").ifEmpty { null })
+
     /** Ids a bridge pass deleted (newest last, capped), so [recoverable] can tell OLO's deletions from the person's. */
     private var oloDeleted: Set<String>
         get() = prefs.get(KEY_OLO_DELETED).orEmpty().split(',').filter { it.isNotBlank() }.toSet()
@@ -264,7 +276,10 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
     private suspend fun runLocked(config: BridgeConfig, allowMassDelete: Boolean, onProgress: (Int, Int) -> Unit, trigger: String = "앱"): BridgeReport {
         val samsung = store.bridgeItems(config.samsungCalendarId)
         val google = store.bridgeItems(config.googleCalendarId)
-        val plan = planBridge(samsung, google, links, allowMassDelete, refused = refused)
+        val wanted = intended
+        val plan = planBridge(samsung, google, links, allowMassDelete, refused = refused, intended = wanted)
+        // Carried out or no longer linked: either way it has been heard.
+        if (wanted.isNotEmpty()) intended = wanted.filter { id -> links.any { it.samsungId == id || it.googleId == id } && (id in samsung.map { it.id } || id in google.map { it.id }) }.toSet()
         // A copy Google dropped before it ever synced: remember the Samsung event so it
         // is offered once more at most, not resent on every pass.
         val gIds = google.map { it.id }.toSet()
@@ -444,6 +459,7 @@ class BridgeEngine(private val store: CalendarStore, private val prefs: Preferen
         const val KEY_ENTRIES = "bridge.entries"
         const val KEY_LAST_CHECK = "bridge.lastCheck"
         const val KEY_OLO_DELETED = "bridge.oloDeleted"
+        const val KEY_INTENDED = "bridge.intended"
         const val KEY_AUTO_DELETED = "bridge.autoDeleted"
         const val RS = "\u001C"
         /** How long an automatic deletion can be undone. */

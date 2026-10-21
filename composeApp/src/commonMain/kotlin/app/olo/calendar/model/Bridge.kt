@@ -192,11 +192,17 @@ fun planBridge(
     autoDeleteLimit: Int = AUTO_DELETE_LIMIT,
     /** Samsung ids Google refused before (with the print they had): not sent again unless edited. */
     refused: Map<String, String> = emptyMap(),
+    /**
+     * Event ids the person deleted in OLO itself (docs/11 §3): their partners go
+     * without the safety stop, however many there are (a lunar repeat is ten events).
+     */
+    intended: Set<String> = emptySet(),
 ): BridgePlan {
     val s = samsung.associateBy { it.id }
     val g = google.associateBy { it.id }
     val ops = mutableListOf<BridgeOp>()
     val deletes = mutableListOf<BridgeOp>()
+    val meant = mutableListOf<BridgeOp>()
     val dropped = mutableListOf<BridgeLink>()
     val orphans = mutableListOf<BridgeLink>()
     var conflicts = 0
@@ -215,8 +221,8 @@ fun planBridge(
             // Never a reason to delete the partner; the pair is dropped and re-formed.
             si == null && !l.samsungConfirmed -> { orphans += l; linkedG -= l.googleId }
             gi == null && !l.googleConfirmed -> { orphans += l; linkedS -= l.samsungId }
-            si == null -> deletes += BridgeOp.DeleteGoogle(l.googleId, l.samsungId)
-            gi == null -> deletes += BridgeOp.DeleteSamsung(l.samsungId, l.googleId)
+            si == null -> (if (l.samsungId in intended) meant else deletes) += BridgeOp.DeleteGoogle(l.googleId, l.samsungId)
+            gi == null -> (if (l.googleId in intended) meant else deletes) += BridgeOp.DeleteSamsung(l.samsungId, l.googleId)
             si.fingerprint == gi.fingerprint -> {
                 if (si.fingerprint != l.samsungPrint || gi.fingerprint != l.googlePrint) ops += BridgeOp.Agree(si.id, gi.id)
             }
@@ -274,6 +280,7 @@ fun planBridge(
     }
 
     // A few deletions go through (and are kept for undo by the engine); many wait for a person.
+    ops += meant
     val carry = allowMassDelete || deletes.size <= autoDeleteLimit
     if (carry) ops += deletes
     val held = if (carry) 0 else deletes.size
