@@ -72,6 +72,7 @@ class BridgeWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             val store = AndroidCalendarStore(ctx)
             val report = runCatching { BridgeEngine(store, prefs).run(BridgeConfig(st.bridgeSamsungId, st.bridgeGoogleId), trigger = "백그라운드") }
             report.getOrNull()?.let { if (it.toGoogle + it.toSamsung + it.deleted > 0) store.requestSync() }
+            report.getOrNull()?.let { BridgeAlerts.afterPass(ctx, it, st.bridgeAlerts) }
         } else if (!widgets) {
             return Result.success()
         }

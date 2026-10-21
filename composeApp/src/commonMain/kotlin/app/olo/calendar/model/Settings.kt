@@ -38,6 +38,8 @@ data class AppSettings(
      */
     val syncExcluded: Set<String> = emptySet(),
     val widgetBackground: WidgetBackground = WidgetBackground.SOLID,
+    /** A phone notification when a background bridge pass needs the person (docs/12 §3). */
+    val bridgeAlerts: Boolean = true,
 ) {
     val bridgeOn: Boolean get() = bridgeSamsungId != null && bridgeGoogleId != null
 }
@@ -72,6 +74,7 @@ fun Preferences.loadSettings(): AppSettings {
         bridgeSamsungId = get("bridgeSamsungId"),
         bridgeGoogleId = get("bridgeGoogleId"),
         syncExcluded = get("syncExcluded").orEmpty().split('\n').filter { it.isNotBlank() }.toSet(),
+        bridgeAlerts = get("bridgeAlerts")?.toBooleanStrictOrNull() ?: d.bridgeAlerts,
         widgetBackground = get("widgetBackground")?.let { v -> WidgetBackground.entries.firstOrNull { it.name == v } } ?: d.widgetBackground,
     )
 }
@@ -91,4 +94,5 @@ fun Preferences.saveSettings(s: AppSettings) {
     put("bridgeGoogleId", s.bridgeGoogleId)
     put("syncExcluded", s.syncExcluded.joinToString("\n").ifEmpty { null })
     put("widgetBackground", s.widgetBackground.name)
+    put("bridgeAlerts", s.bridgeAlerts.toString())
 }

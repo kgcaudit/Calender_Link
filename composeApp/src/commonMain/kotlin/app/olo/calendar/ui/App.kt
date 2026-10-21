@@ -56,6 +56,18 @@ interface SystemSettings {
      * while closed (docs/07 §18); already exempt, opens the app's own settings page.
      */
     fun askBatteryUnrestricted() {}
+
+    /** Hands an event to another app (KakaoTalk, messages, mail): as text, or with an .ics file (docs/12 §1). */
+    fun share(text: String, icsName: String? = null, ics: String? = null) {}
+
+    /** A map app at this place (docs/12 §2): whichever the person uses (Naver, Kakao, Google). */
+    fun openMap(query: String) {}
+
+    /** Whether OLO may post notifications (Android 13+ asks once). */
+    val notificationsAllowed: Boolean get() = true
+
+    /** Asks once to let OLO post notifications, for bridge problems (docs/12 §3). */
+    fun askNotifications() {}
 }
 
 /** Where to land when OLO is opened from outside (a widget tap, docs/09 §6). */

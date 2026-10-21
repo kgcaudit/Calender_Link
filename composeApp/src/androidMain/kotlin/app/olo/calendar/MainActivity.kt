@@ -130,6 +130,47 @@ class MainActivity : ComponentActivity(), PermissionGate, SystemSettings {
             .onFailure { openSettings() }
     }
 
+    override fun share(text: String, icsName: String?, ics: String?) {
+        val send = Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_TEXT, text)
+        if (ics != null && icsName != null) {
+            // The file goes through a content URI (FileProvider), so the receiving app may read it.
+            val dir = java.io.File(cacheDir, "shared").apply { mkdirs() }
+            val file = java.io.File(dir, icsName).apply { writeText(ics) }
+            val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", file)
+            send.setType("text/calendar").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } else {
+            send.setType("text/plain")
+        }
+        runCatching { startActivity(Intent.createChooser(send, "일정 보내기")) }
+    }
+
+    override fun openMap(query: String) {
+        // Any map app the person has (Naver, Kakao, Google); the web map if none answers geo:.
+        val geo = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(query)))
+        runCatching { startActivity(geo) }.onFailure {
+            runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/search/?api=1&query=" + Uri.encode(query)))) }
+        }
+    }
+
+    override val notificationsAllowed: Boolean
+        get() = android.os.Build.VERSION.SDK_INT < 33 ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+    private val notificationAsk = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    override fun askNotifications() {
+        if (notificationsAllowed) return
+        if (android.os.Build.VERSION.SDK_INT >= 33 && !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) && askedNotifications) {
+            // Refused for good: only the app's notification settings can change it.
+            runCatching { startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)) }
+            return
+        }
+        askedNotifications = true
+        if (android.os.Build.VERSION.SDK_INT >= 33) notificationAsk.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private var askedNotifications = false
+
     override fun openSettings() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
     }

@@ -1,5 +1,14 @@
 package app.olo.calendar.ui
 
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.AnnotatedString
+import app.olo.calendar.model.SharedEvent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -83,6 +92,7 @@ internal fun OloSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun EventDetailSheet(
     occurrence: Occurrence,
@@ -92,8 +102,13 @@ fun EventDetailSheet(
     onEdit: (StoredEvent, EditScope?) -> Unit,
     /** A copy of this occurrence as a new single event, opened in the editor. */
     onDuplicate: (StoredEvent) -> Unit = {},
+    /** Sends the occurrence to another app; [asFile] adds an .ics (docs/12 §1). */
+    onShare: (SharedEvent, asFile: Boolean) -> Unit = { _, _ -> },
+    /** Opens a map app at the place (docs/12 §2). */
+    onMap: (String) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
+    var askShare by remember { mutableStateOf(false) }
     var stored by remember { mutableStateOf<StoredEvent?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
     var askEdit by remember { mutableStateOf(false) }
@@ -119,14 +134,26 @@ fun EventDetailSheet(
         cal?.let { DetailLine("캘린더", "${it.name} · ${it.kind.koLabel()}") }
         stored?.let { s ->
             val d = s.draft
-            if (d.location.isNotBlank()) DetailLine("장소", d.location)
+            if (d.location.isNotBlank()) {
+                // Tapping the place opens a map app there.
+                Row(Modifier.padding(vertical = 4.dp).clickable { onMap(d.location.trim()) }) {
+                    Text("장소", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(64.dp))
+                    Text(d.location, style = MaterialTheme.typography.bodyMedium, color = OloTone.accent, textDecoration = TextDecoration.Underline)
+                }
+            }
             when {
                 lunarGroup != null -> DetailLine("반복", "음력 매년 · ${lunarGroup.rule.label()}")
                 d.recurrence != null -> DetailLine("반복", d.recurrence.describeKo(d.startDate))
                 s.rawRule != null -> DetailLine("반복", "다른 앱에서 만든 규칙(그대로 유지)")
             }
             if (d.reminderMinutes.isNotEmpty()) DetailLine("알림", d.reminderMinutes.sorted().joinToString { reminderLabel(it) })
-            if (d.description.isNotBlank()) DetailLine("메모", d.description)
+            if (d.description.isNotBlank()) {
+                // Web links (a Meet or Zoom room) and phone numbers in the memo can be tapped.
+                Row(Modifier.padding(vertical = 4.dp)) {
+                    Text("메모", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(64.dp))
+                    Text(linkified(d.description, OloTone.accent), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
         }
         Spacer(Modifier.height(16.dp))
         val s = stored
@@ -150,17 +177,38 @@ fun EventDetailSheet(
                         OloOutlinedButton("삭제", { controller.delete(occurrence, if (s.isException) EditScope.THIS else EditScope.ALL); onDismiss() })
                     }
                 }
+                askShare -> {
+                    val shared = SharedEvent(
+                        "${occurrence.eventId}-${occurrence.begin.toEpochMilliseconds()}", occurrence.title, occurrence.allDay,
+                        occurrence.begin, occurrence.end, occurrence.firstDay, occurrence.lastDay, s.draft.location, s.draft.description,
+                    )
+                    Text("어떻게 보낼까요?", style = MaterialTheme.typography.bodyMedium)
+                    Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OloTextButton("메시지로 보내기 (카카오톡·문자)", { askShare = false; onShare(shared, false) })
+                        OloTextButton("캘린더 파일(.ics)로 보내기", { askShare = false; onShare(shared, true) })
+                        OloTextButton("취소", { askShare = false }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
                 askEdit -> {
                     Text("반복 일정입니다. 어디까지 바꿀까요?", style = MaterialTheme.typography.bodyMedium)
                     ScopeChoices(onPick = { reach -> askEdit = false; onEdit(s, reach) }, onCancel = { askEdit = false }, destructive = false)
                 }
-                else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                else -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     OloButton("편집", { if (series) askEdit = true else onEdit(s, if (s.isException) EditScope.THIS else null) })
                     OloOutlinedButton("복제", { onDuplicate(s) })
+                    OloOutlinedButton("공유", { askShare = true })
                     OloTextButton("삭제", { confirmDelete = true }, color = MaterialTheme.colorScheme.error)
                 }
             }
         } else if (s != null) {
+            // Read-only calendars (holidays, a subscribed one) can still be shared.
+            OloOutlinedButton("공유", {
+                onShare(
+                    SharedEvent("${occurrence.eventId}-${occurrence.begin.toEpochMilliseconds()}", occurrence.title, occurrence.allDay,
+                        occurrence.begin, occurrence.end, occurrence.firstDay, occurrence.lastDay, s.draft.location, s.draft.description),
+                    false,
+                )
+            })
             Text("읽기 전용 캘린더라 수정할 수 없습니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -179,6 +227,26 @@ private fun ScopeChoices(onPick: (EditScope) -> Unit, onCancel: () -> Unit, dest
         OloTextButton("취소", onCancel, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
+
+/** Web addresses and Korean phone numbers in [text] as tappable links (opened by the system). */
+internal fun linkified(text: String, color: androidx.compose.ui.graphics.Color): AnnotatedString = buildAnnotatedString {
+    var at = 0
+    LINKS.findAll(text).forEach { m ->
+        append(text.substring(at, m.range.first))
+        val raw = m.value.trimEnd('.', ',', ')', '>', '」', '』')
+        val url = when {
+            raw.startsWith("http://") || raw.startsWith("https://") -> raw
+            raw.startsWith("www.") -> "https://$raw"
+            else -> "tel:" + raw.filter { it.isDigit() || it == '+' }
+        }
+        withLink(LinkAnnotation.Url(url, TextLinkStyles(SpanStyle(color = color, textDecoration = TextDecoration.Underline)))) { append(raw) }
+        append(m.value.substring(raw.length))
+        at = m.range.last + 1
+    }
+    append(text.substring(at))
+}
+
+private val LINKS = Regex("(https?://\\S+|www\\.\\S+|(?<![\\d-])(?:\\+82[- ]?|0)\\d{1,2}[- ]?\\d{3,4}[- ]?\\d{4}(?![\\d-]))")
 
 @Composable
 private fun DetailLine(label: String, value: String) {
@@ -395,6 +463,9 @@ fun SettingsSheet(
     /** Lets OLO see an account ("허용 필요"), then turns its sync on. */
     /** Allows an account OLO cannot see yet; the callback says whether the person did. */
     onAllow: (String, (Boolean) -> Unit) -> Unit = { _, done -> done(false) },
+    /** Whether the phone lets OLO post notifications, and the way to ask (docs/12 §3). */
+    notificationsAllowed: Boolean = true,
+    onAskNotifications: () -> Unit = {},
 ) {
     val st = state.settings
     var picking by remember { mutableStateOf(false) }
@@ -436,6 +507,16 @@ fun SettingsSheet(
             val included = accounts.count { it.syncKey !in st.syncExcluded && it.accountName !in state.sync.accountsWithSyncOff }
             SettingRow("지금 동기화 대상", summary = "계정 ${accounts.size}개 중 ${included}개", onClick = { choosingSync = true }) {
                 Icon(OloIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            }
+            if (st.bridgeOn) {
+                SettingSwitch(
+                    "연동 문제 알림",
+                    if (st.bridgeAlerts && !notificationsAllowed) "휴대폰 알림이 꺼져 있음 · 켜면 허용을 묻습니다" else "앱을 닫아 둔 동안 확인할 일이 생기면 알림",
+                    st.bridgeAlerts && notificationsAllowed,
+                ) { v ->
+                    onChange { it.copy(bridgeAlerts = v) }
+                    if (v && !notificationsAllowed) onAskNotifications()
+                }
             }
 
             SettingGroup("정보")

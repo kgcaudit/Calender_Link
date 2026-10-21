@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.READ_SYNC_STATS" />
     <!-- Lets OLO ask once to run the bridge in the background (docs/07 §18); the person decides. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Bridge problems found while OLO is closed (docs/12 §3); Android 13+ asks the person. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:enableOnBackInvokedCallback="true"
@@ -70,6 +72,17 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/olo_next_widget" />
         </receiver>
+
+        <!-- Shared .ics files, read by the app the person sends them to (docs/12 §1). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shared_files" />
+        </provider>
 
         <!-- A new time zone or a clock set by hand changes the widget's days. -->
         <receiver

@@ -480,3 +480,17 @@ fun bridgeStatusLine(connected: Boolean, report: BridgeReport?, googleSyncOff: B
     report.failed > 0 || report.heldDeletes > 0 -> "${Term.BRIDGE} ${app.olo.calendar.model.agoText(report.atMillis, nowMillis)} · 확인 필요" to true
     else -> "${Term.BRIDGE} ${app.olo.calendar.model.agoText(report.atMillis, nowMillis)} · 문제 없음" to false
 }
+
+/**
+ * The phone notification a background pass raises (docs/12 §3): (title, text,
+ * signature), or null when nothing needs the person. The same signature as last
+ * time is not raised again, so one problem notifies once.
+ */
+fun bridgeAlert(report: BridgeReport): Triple<String, String, String>? {
+    if (report.failed == 0 && report.heldDeletes == 0) return null
+    val text = listOfNotNull(
+        report.heldDeletes.takeIf { it > 0 }?.let { "한쪽에서만 사라진 일정 ${it}개 · 지울지 확인해 주세요" },
+        report.failed.takeIf { it > 0 }?.let { "${Term.GOOGLE_MAIN}와 주고받지 못한 일정 ${it}건" },
+    ).joinToString("\n")
+    return Triple("${Term.BRIDGE} 확인 필요", text, "h=${report.heldDeletes};f=${report.failed}")
+}

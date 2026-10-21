@@ -2,6 +2,9 @@ package app.olo.calendar.ui
 
 import app.olo.calendar.design.OloMotion
 import app.olo.calendar.model.eulReul
+import app.olo.calendar.model.icsFileName
+import app.olo.calendar.model.icsOf
+import app.olo.calendar.model.shareText
 import app.olo.calendar.model.EditScope
 import app.olo.calendar.model.OccurrenceRef
 import app.olo.calendar.model.occurrenceDraft
@@ -130,6 +133,7 @@ fun CalendarScreen(
     onRequestHandled: () -> Unit = {},
 ) {
     val state by controller.state.collectAsState()
+    val use24Hour = LocalUse24Hour.current
     var sheet by remember { mutableStateOf<Sheet>(startBridgeFor?.let { Sheet.Bridge(it) } ?: if (startSettings) Sheet.Settings else Sheet.None) }
     var searchOpen by remember { mutableStateOf(startSearch != null) }
     var pickerOpen by remember { mutableStateOf(false) }
@@ -318,6 +322,12 @@ fun CalendarScreen(
                     EditScope.FOLLOWING -> Sheet.Editor(occurrenceDraft(stored.draft, at), stored, reach, at)
                 }
             },
+            onShare = { e, asFile ->
+                val text = shareText(e, controller.zone, use24Hour)
+                if (asFile) settings?.share(text, icsFileName(e.title), icsOf(e, kotlinx.datetime.Clock.System.now().toEpochMilliseconds()))
+                else settings?.share(text)
+            },
+            onMap = { place -> settings?.openMap(place) },
             onDuplicate = { stored ->
                 val copy = occurrenceDraft(stored.draft, s.occurrence.ref()).copy(id = null, recurrence = null, keepExistingRule = false, lunarYearly = false)
                 sheet = Sheet.Editor(copy, null)
@@ -362,13 +372,19 @@ fun CalendarScreen(
             onChange = controller::updateSettings,
             onDismiss = { sheet = Sheet.None },
             onAllow = { account, allowed -> enableSync(account, state, controller, settings, allowed) { syncNote = it } },
+            notificationsAllowed = settings?.notificationsAllowed ?: true,
+            onAskNotifications = { settings?.askNotifications() },
         )
         is Sheet.Bridge -> BridgeSheet(
             samsung = state.calendarsById[s.samsungCalendarId],
             state = state,
             controller = controller,
             onEnableSync = { account -> enableSync(account, state, controller, settings) { syncNote = it } },
-            onChanged = { on -> settings?.bridgeChanged(on) },
+            onChanged = { on ->
+                settings?.bridgeChanged(on)
+                // Just connected: ask once for the notifications that report its problems (docs/12 §3).
+                if (on && state.settings.bridgeAlerts) settings?.askNotifications()
+            },
             onDismiss = { sheet = Sheet.None },
             batteryUnrestricted = settings?.batteryUnrestricted ?: true,
             onBattery = { settings?.askBatteryUnrestricted() },
