@@ -1,5 +1,6 @@
 package app.olo.calendar.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.animation.AnimatedContent
@@ -198,7 +199,8 @@ internal fun MonthBody(
             }
             Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
             Box(Modifier.weight(0.4f).fillMaxHeight()) {
-                DaySidePane(
+                // Another month is only being looked at: no day beside it until one is tapped.
+                if (YearMonth.of(state.selected) == state.month) DaySidePane(
                     day = state.selected,
                     today = state.today,
                     items = dayItems,
@@ -291,6 +293,14 @@ internal fun MonthBody(
                     }
                 }
             }
+            // Another month is only being looked at: its day panel stays hidden until a day there is tapped.
+            val dayHere = YearMonth.of(state.selected) == state.month || weekMode
+            AnimatedVisibility(
+                visible = dayHere,
+                enter = fadeIn(tween(OloMotion.Medium)) + androidx.compose.animation.slideInVertically(tween(OloMotion.Medium, easing = OloMotion.EmphasizedDecelerate)) { it / 4 },
+                exit = fadeOut(tween(OloMotion.Quick)) + androidx.compose.animation.slideOutVertically(tween(OloMotion.Quick)) { it / 4 },
+                modifier = Modifier.weight(1f),
+            ) {
             DayPanel(
                 day = state.selected,
                 today = state.today,
@@ -310,8 +320,9 @@ internal fun MonthBody(
                     val off = if (stage.offset.isNaN()) f else stage.offset
                     if (f - l < 1f) 1f else ((f - off) / (f - l) * 3f).coerceIn(0f, 1f)
                 },
-                modifier = Modifier.weight(1f).nestedScroll(connection),
+                modifier = Modifier.fillMaxSize().nestedScroll(connection),
             )
+            }
         }
     }
 }
@@ -791,7 +802,11 @@ internal fun DayItems(
                             val t = clock(o.begin.toLocalDateTime(zone).time, use24)
                             val (ampm, hm) = t.split(' ').let { if (it.size == 2) it[0] to it[1] else "" to t }
                             if (ampm.isNotEmpty()) Text(ampm, fontSize = 9.sp, lineHeight = 10.sp, color = OloTone.glyph(hue))
-                            Text(hm, fontSize = 14.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold, color = OloTone.onSolid(hue))
+                            // "10:00" fits the tile on one line (it wrapped to "10:0 / 0").
+                            Text(
+                                hm, fontSize = if (hm.length > 4) 12.sp else 14.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold,
+                                color = OloTone.onSolid(hue), maxLines = 1, softWrap = false, letterSpacing = (-0.3).sp,
+                            )
                         }
                     }
                     Spacer(Modifier.width(14.dp))
