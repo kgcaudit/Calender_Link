@@ -372,18 +372,15 @@ class CalendarController(
         scope.launch { bridge.forget() }
     }
 
-    /** A month page settled: keep the day number (31 → the month's last day), or today in today's month. */
+    /**
+     * A month page settled. Today stays the selected day: another month shows no
+     * selection until a day is tapped (no jump to the same day number there).
+     * Back in today's month, today is selected again.
+     */
     fun showMonth(month: YearMonth) {
         val s0 = _state.value
         if (s0.month == month) return
-        _state.update { s ->
-            val sel = when {
-                YearMonth.of(s.selected) == month -> s.selected
-                YearMonth.of(s.today) == month -> s.today
-                else -> LocalDate(month.year, month.month, minOf(s.selected.dayOfMonth, month.length))
-            }
-            s.copy(month = month, selected = sel)
-        }
+        _state.update { s -> s.copy(month = month, selected = if (YearMonth.of(s.today) == month) s.today else s.selected) }
         reload()
     }
 
@@ -503,7 +500,8 @@ class CalendarController(
         val s = _state.value
         val day = when (s.view) {
             ViewMode.YEAR -> s.selected.plus(DatePeriod(years = dir))
-            ViewMode.MONTH, ViewMode.AGENDA -> s.month.plusMonths(dir).firstDay.let { if (YearMonth.of(s.today) == YearMonth.of(it)) s.today else it }
+            // A month away: the selection stays as it is (see [showMonth]).
+            ViewMode.MONTH, ViewMode.AGENDA -> { showMonth(s.month.plusMonths(dir)); return }
             ViewMode.WEEK -> s.selected.plus(7 * dir, DateTimeUnit.DAY)
             ViewMode.DAY -> s.selected.plus(dir, DateTimeUnit.DAY)
         }

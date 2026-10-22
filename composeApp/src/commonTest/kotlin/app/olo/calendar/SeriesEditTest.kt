@@ -99,6 +99,25 @@ class SeriesEditTest {
     }
 }
 
+/** 0.15.2: turning the month does not pick the same day number there. */
+class MonthSelectionTest {
+    @Test
+    fun anotherMonthLeavesTheSelectionAlone() = runTest {
+        val c = CalendarController(RecordingStore(emptyList()), backgroundScope, TimeZone.of("Asia/Seoul"), MemoryPreferences())
+        runCurrent()
+        val today = c.state.value.today
+        val next = c.state.value.month.plusMonths(1)
+        c.showMonth(next)
+        assertEquals(next, c.state.value.month)
+        assertEquals(today, c.state.value.selected)
+        c.step(1)
+        assertEquals(next.plusMonths(1), c.state.value.month)
+        assertEquals(today, c.state.value.selected)
+        c.showMonth(app.olo.calendar.model.YearMonth.of(today))
+        assertEquals(today, c.state.value.selected)
+    }
+}
+
 private class RecordingStore(private val items: List<Occurrence>) : CalendarStore {
     val deleted = mutableListOf<Pair<OccurrenceRef, EditScope>>()
     override suspend fun calendars(): List<CalendarInfo> =
