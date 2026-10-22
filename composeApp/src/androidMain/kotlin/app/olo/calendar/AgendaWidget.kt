@@ -151,11 +151,11 @@ private fun AgendaContent(context: Context, d: AgendaData) {
             Column(GlanceModifier.defaultWeight().clickable(open(context, OpenRequest.Day(d.today)))) {
                 Text(
                     "${d.today.monthNumber}월 ${d.today.dayOfMonth}일 ${d.today.dayOfWeek.koShort()}요일",
-                    style = TextStyle(color = OnBg, fontSize = 17.sp, fontWeight = FontWeight.Bold), maxLines = 1,
+                    style = TextStyle(color = OnBg, fontSize = 19.sp, fontWeight = FontWeight.Bold), maxLines = 1,
                 )
-                if (d.lunar != null) Text(d.lunar, style = TextStyle(color = Faint, fontSize = 11.sp), maxLines = 1)
+                if (d.lunar != null) Text(d.lunar, style = TextStyle(color = Muted, fontSize = 13.sp), maxLines = 1)
             }
-            AddButton(context, d.today)
+            AddButton(context, d.today, 40.dp)
         }
         if (!d.granted) { NoPermission(context, d.today); return@Column }
         val lines = linesOf(d.days)
@@ -184,19 +184,19 @@ private fun LineView(context: Context, l: Line, d: AgendaData, wide: Boolean) {
                 else -> Muted
             }
             Row(
-                GlanceModifier.fillMaxWidth().padding(top = 10.dp, bottom = 3.dp).clickable(open(context, OpenRequest.Day(l.date))),
+                GlanceModifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp).clickable(open(context, OpenRequest.Day(l.date))),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(label, style = TextStyle(color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+                Text(label, style = TextStyle(color = color, fontSize = 14.sp, fontWeight = FontWeight.Bold), maxLines = 1)
                 if (l.holidays.isNotEmpty()) {
-                    Text("  " + l.holidays.joinToString(", "), style = TextStyle(color = Holiday, fontSize = 12.sp), maxLines = 1)
+                    Text("  " + l.holidays.joinToString(", "), style = TextStyle(color = Holiday, fontSize = 13.sp), maxLines = 1)
                 }
             }
         }
         is Line.Card -> EventCard(context, l.o, l.date, d, wide)
         Line.Empty -> Box(GlanceModifier.fillMaxWidth().padding(vertical = 2.dp)) {
-            Box(GlanceModifier.fillMaxWidth().height(34.dp).background(Pill).cornerRadius(10.dp).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) {
-                Text("남은 일정 없음", style = TextStyle(color = Muted, fontSize = 13.sp), maxLines = 1)
+            Box(GlanceModifier.fillMaxWidth().height(42.dp).background(Pill).cornerRadius(10.dp).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) {
+                Text("남은 일정 없음", style = TextStyle(color = Muted, fontSize = 14.sp), maxLines = 1)
             }
         }
     }
@@ -214,19 +214,20 @@ private fun EventCard(context: Context, o: Occurrence, date: LocalDate, d: Agend
         else -> clock(o.begin.toLocalDateTime(d.zone).time, d.use24)
     }
     val title = o.title.ifBlank { "(제목 없음)" } + if (wide && o.location.isNotBlank()) " · ${o.location}" else ""
-    Box(GlanceModifier.fillMaxWidth().padding(vertical = 2.dp)) {
+    Box(GlanceModifier.fillMaxWidth().padding(vertical = 3.dp)) {
         Row(
-            GlanceModifier.fillMaxWidth().height(34.dp)
+            // 42dp tall with 3dp between: close to the 48dp touch target (docs/13 §7).
+            GlanceModifier.fillMaxWidth().height(42.dp)
                 .background(if (o.allDay) softFill(o.colorArgb) else Plain).cornerRadius(10.dp)
                 .clickable(open(context, OpenRequest.Event(o.eventId, o.begin.toEpochMilliseconds()))),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (!o.allDay) Box(GlanceModifier.width(4.dp).fillMaxHeight().background(solid(o.colorArgb))) {}
             Spacer(GlanceModifier.width(if (o.allDay) 12.dp else 10.dp))
-            Text(title, style = TextStyle(color = OnBg, fontSize = 14.sp), maxLines = 1, modifier = GlanceModifier.defaultWeight())
+            Text(title, style = TextStyle(color = OnBg, fontSize = 15.sp, fontWeight = FontWeight.Medium), maxLines = 1, modifier = GlanceModifier.defaultWeight())
             Text(
                 right,
-                style = TextStyle(color = if (live) Clay else Muted, fontSize = 12.sp, fontWeight = if (live) FontWeight.Bold else FontWeight.Normal),
+                style = TextStyle(color = if (live) Clay else Muted, fontSize = 13.sp, fontWeight = if (live) FontWeight.Bold else FontWeight.Normal),
                 maxLines = 1, modifier = GlanceModifier.padding(start = 8.dp, end = 12.dp),
             )
         }

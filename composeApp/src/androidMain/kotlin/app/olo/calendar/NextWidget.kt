@@ -152,19 +152,19 @@ private fun NextContent(context: Context, d: NextData) {
                     e == null -> {
                         Text(
                             "${d.today.monthNumber}월 ${d.today.dayOfMonth}일 (${d.today.dayOfWeek.koShort()})",
-                            style = TextStyle(color = OnBg, fontSize = 16.sp, fontWeight = FontWeight.Bold), maxLines = 1,
+                            style = TextStyle(color = OnBg, fontSize = 18.sp, fontWeight = FontWeight.Bold), maxLines = 1,
                         )
-                        Text(listOfNotNull(d.lunar, "남은 일정 없음").joinToString(" · "), style = TextStyle(color = Muted, fontSize = 12.sp), maxLines = 1)
+                        Text(listOfNotNull(d.lunar, "남은 일정 없음").joinToString(" · "), style = TextStyle(color = Muted, fontSize = 13.sp), maxLines = 1)
                     }
                     else -> {
                         val label = d.labels.first()
                         Text(
                             label,
-                            style = TextStyle(color = if (label.startsWith("진행 중")) Holiday else Clay, fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                            style = TextStyle(color = if (label.startsWith("진행 중")) Holiday else Clay, fontSize = 13.sp, fontWeight = FontWeight.Bold),
                             maxLines = 1,
                         )
-                        Text(e.title.ifBlank { "(제목 없음)" }, style = TextStyle(color = OnBg, fontSize = 16.sp, fontWeight = FontWeight.Bold), maxLines = 1)
-                        Text(d.ranges.first(), style = TextStyle(color = Muted, fontSize = 12.sp), maxLines = 1)
+                        Text(e.title.ifBlank { "(제목 없음)" }, style = TextStyle(color = OnBg, fontSize = 18.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+                        Text(d.ranges.first(), style = TextStyle(color = Muted, fontSize = 13.sp), maxLines = 1)
                     }
                 }
             }
@@ -180,8 +180,8 @@ private fun NextContent(context: Context, d: NextData) {
                 Box(GlanceModifier.width(3.dp).height(30.dp).background(solid(second.colorArgb)).cornerRadius(2.dp)) {}
                 Spacer(GlanceModifier.width(8.dp))
                 Column(GlanceModifier.defaultWeight()) {
-                    Text(second.title.ifBlank { "(제목 없음)" }, style = TextStyle(color = OnBg, fontSize = 13.sp), maxLines = 1)
-                    Text(d.labels[1], style = TextStyle(color = Muted, fontSize = 11.sp), maxLines = 1)
+                    Text(second.title.ifBlank { "(제목 없음)" }, style = TextStyle(color = OnBg, fontSize = 14.sp), maxLines = 1)
+                    Text(d.labels[1], style = TextStyle(color = Muted, fontSize = 12.sp), maxLines = 1)
                 }
             }
         }

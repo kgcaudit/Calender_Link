@@ -162,7 +162,12 @@ fun CalendarScreen(
         val r = request ?: return@LaunchedEffect
         searchOpen = false
         when (r) {
-            is OpenRequest.Day -> { sheet = Sheet.None; controller.open(r.date, if (state.view == ViewMode.YEAR) ViewMode.MONTH else state.view) }
+            is OpenRequest.Day -> {
+                sheet = Sheet.None
+                controller.open(r.date, if (state.view == ViewMode.YEAR) ViewMode.MONTH else state.view)
+                // A day tapped on the widget opens with its events in view (docs/13 §7), not behind a folded panel.
+                if (stage.currentValue == MonthStage.FULL) stage.animateTo(MonthStage.LINES)
+            }
             is OpenRequest.NewEvent -> { controller.select(r.date); openEditor(r.date, null) }
             is OpenRequest.Event -> controller.findOccurrence(r.eventId, r.beginMillis)?.let { o ->
                 controller.open(o.firstDay, if (state.view == ViewMode.YEAR) ViewMode.MONTH else state.view)

@@ -167,24 +167,25 @@ private suspend fun loadMonth(context: Context, offset: Int): MonthData {
     return MonthData(offset, true, month, today, weeks, src.settings.weekStart, events, red, lunar, src.status, midnight, src.settings.widgetBackground)
 }
 
+// Sizes (docs/13 §7): text 12sp and up (Material's small label/body), touch targets near 48dp.
 private val PAD_H = 8.dp
-private val HEADER_H = 36.dp
-private val WEEKDAY_H = 18.dp
-private val NUMBER_H = 18.dp
-private val LANE_H = 15.dp
-private val MORE_H = 11.dp
-private val STATUS_H = 26.dp
+private val HEADER_H = 44.dp
+private val WEEKDAY_H = 20.dp
+private val NUMBER_H = 20.dp
+private val LANE_H = 18.dp
+private val STATUS_H = 28.dp
 
 @Composable
 private fun MonthContent(context: Context, d: MonthData) {
     val size = LocalSize.current
     val colW: Dp = (size.width - PAD_H * 2) / 7
-    // 4×5 and taller also has room for the bridge line.
-    val withStatus = d.status != null && size.height >= 380.dp
+    // 4×5 and taller (≥ 430dp: a 4×4 is about 375dp on a Galaxy home screen) also has the bridge line.
+    val tall = size.height >= 430.dp
+    val withStatus = d.status != null && tall
     val gridH = size.height - 16.dp - HEADER_H - WEEKDAY_H - (if (withStatus) STATUS_H else 0.dp)
     val weekH = gridH / d.weeks.size.coerceAtLeast(1)
     // As many bar rows as the week has room for: 2 on 4×4, 3 on 4×5 (docs/13 §3 W2).
-    val lanes = ((weekH - NUMBER_H - MORE_H) / LANE_H).toInt().coerceIn(1, if (size.height >= 380.dp) 3 else 2)
+    val lanes = ((weekH - NUMBER_H) / LANE_H).toInt().coerceIn(1, if (tall) 3 else 2)
     Column(GlanceModifier.fillMaxSize().background(widgetBg(d.background)).widgetShape().padding(horizontal = PAD_H, vertical = 8.dp)) {
         MonthHeader(context, d)
         Row(GlanceModifier.fillMaxWidth().height(WEEKDAY_H)) {
@@ -193,7 +194,7 @@ private fun MonthContent(context: Context, d: MonthData) {
                     w.koShort(),
                     style = TextStyle(
                         color = when (w) { DayOfWeek.SUNDAY -> Holiday; DayOfWeek.SATURDAY -> Saturday; else -> Muted },
-                        fontSize = 11.sp, textAlign = TextAlign.Center,
+                        fontSize = 12.sp, textAlign = TextAlign.Center,
                     ),
                     modifier = GlanceModifier.width(colW),
                 )
@@ -214,65 +215,62 @@ private fun MonthHeader(context: Context, d: MonthData) {
         Arrow("‹", -1)
         Text(
             "${d.month.month}월",
-            style = TextStyle(color = OnBg, fontSize = 17.sp, fontWeight = FontWeight.Bold),
+            style = TextStyle(color = OnBg, fontSize = 19.sp, fontWeight = FontWeight.Bold),
             modifier = GlanceModifier.clickable(open(context, OpenRequest.Day(if (d.offset == 0) d.today else d.month.firstDay))),
         )
         Arrow("›", 1)
-        Text("${d.month.year}", style = TextStyle(color = Faint, fontSize = 11.sp), modifier = GlanceModifier.padding(start = 2.dp))
+        Text("${d.month.year}", style = TextStyle(color = Muted, fontSize = 13.sp), modifier = GlanceModifier.padding(start = 2.dp))
         Spacer(GlanceModifier.defaultWeight())
         // Today's number: back to this month, or (already here) open OLO on today.
         Box(
-            GlanceModifier.height(24.dp).width(30.dp).background(Divider).cornerRadius(6.dp).clickable(
+            GlanceModifier.height(32.dp).width(40.dp).background(Divider).cornerRadius(8.dp).clickable(
                 if (d.offset != 0) actionRunCallback<MonthStep>(actionParametersOf(MonthStep.STEP to 0)) else open(context, OpenRequest.Day(d.today)),
             ),
             contentAlignment = Alignment.Center,
         ) {
-            Text("${d.today.dayOfMonth}", style = TextStyle(color = OnBg, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+            Text("${d.today.dayOfMonth}", style = TextStyle(color = OnBg, fontSize = 14.sp, fontWeight = FontWeight.Bold))
         }
         Spacer(GlanceModifier.width(8.dp))
-        AddButton(context, d.today, 28.dp)
+        AddButton(context, d.today, 36.dp)
     }
 }
 
 @Composable
 private fun Arrow(glyph: String, step: Int) {
     Box(
-        GlanceModifier.width(30.dp).height(32.dp).clickable(actionRunCallback<MonthStep>(actionParametersOf(MonthStep.STEP to step))),
+        GlanceModifier.width(40.dp).height(HEADER_H).clickable(actionRunCallback<MonthStep>(actionParametersOf(MonthStep.STEP to step))),
         contentAlignment = Alignment.Center,
     ) {
-        Text(glyph, style = TextStyle(color = Clay, fontSize = 20.sp, fontWeight = FontWeight.Bold))
+        Text(glyph, style = TextStyle(color = Clay, fontSize = 24.sp, fontWeight = FontWeight.Bold))
     }
 }
 
-/** One week: the day numbers, [lanes] rows of bars, then "+N" where some did not fit. */
+/**
+ * One week: the day numbers, [lanes] rows of bars, then "+N" where some did not
+ * fit. Every part of a day's column opens that day in OLO (docs/13 §7) — the
+ * number, its bars, the "+N" and the blank below — as Samsung's month widget does.
+ */
 @Composable
 private fun WeekView(context: Context, d: MonthData, week: List<LocalDate>, colW: Dp, weekH: Dp, lanes: Int) {
     val layout = layoutWeek(week, d.events, lanes) { false }
     Column(GlanceModifier.fillMaxWidth().height(weekH)) {
+        // "+N" sits beside the day number, as in the app's month view, so bars keep the room.
         Row(GlanceModifier.fillMaxWidth().height(NUMBER_H)) {
-            week.forEach { day -> DayNumber(context, d, day, colW) }
+            week.forEachIndexed { i, day -> DayNumber(context, d, day, colW, layout.hiddenPerDay[i]) }
         }
         for (lane in 0 until lanes) {
-            LaneRow(context, d, layout.segments.filter { it.lane == lane }.sortedBy { it.startCol }, colW)
+            LaneRow(context, d, week, layout.segments.filter { it.lane == lane }.sortedBy { it.startCol }, colW)
         }
-        if (layout.hiddenPerDay.any { it > 0 }) {
-            Row(GlanceModifier.fillMaxWidth().height(MORE_H)) {
-                layout.hiddenPerDay.forEachIndexed { i, n ->
-                    Text(
-                        if (n > 0) "+$n" else "",
-                        style = TextStyle(color = Muted, fontSize = 9.sp, textAlign = TextAlign.Center),
-                        modifier = GlanceModifier.width(colW).clickable(open(context, OpenRequest.Day(week[i]))),
-                    )
-                }
-            }
+        // The blank under a day still belongs to it.
+        Row(GlanceModifier.fillMaxWidth().defaultWeight()) {
+            week.forEach { day -> Box(GlanceModifier.width(colW).fillMaxHeight().clickable(open(context, OpenRequest.Day(day)))) {} }
         }
-        Spacer(GlanceModifier.defaultWeight())
         Box(GlanceModifier.fillMaxWidth().height(1.dp).background(Divider)) {}
     }
 }
 
 @Composable
-private fun DayNumber(context: Context, d: MonthData, day: LocalDate, colW: Dp) {
+private fun DayNumber(context: Context, d: MonthData, day: LocalDate, colW: Dp, hidden: Int) {
     val inMonth = day.monthNumber == d.month.month
     val isToday = day == d.today
     val color = when {
@@ -288,36 +286,47 @@ private fun DayNumber(context: Context, d: MonthData, day: LocalDate, colW: Dp) 
     ) {
         // Today: the app's Clay tile behind the number.
         Box(
-            GlanceModifier.height(16.dp).padding(horizontal = 3.dp).then(if (isToday) GlanceModifier.background(Clay).cornerRadius(4.dp) else GlanceModifier),
+            GlanceModifier.height(20.dp).padding(horizontal = 4.dp).then(if (isToday) GlanceModifier.background(Clay).cornerRadius(5.dp) else GlanceModifier),
             contentAlignment = Alignment.Center,
         ) {
-            Text("${day.dayOfMonth}", style = TextStyle(color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+            Text("${day.dayOfMonth}", style = TextStyle(color = color, fontSize = 14.sp, fontWeight = FontWeight.Bold), maxLines = 1)
         }
-        if (colW >= 44.dp) d.lunar[day]?.let { Text(it, style = TextStyle(color = Faint, fontSize = 8.sp), maxLines = 1) }
+        if (colW >= 48.dp && (hidden == 0 || colW >= 64.dp)) d.lunar[day]?.let { Text(it, style = TextStyle(color = Faint, fontSize = 10.sp), maxLines = 1) }
+        if (hidden > 0) {
+            Spacer(GlanceModifier.defaultWeight())
+            Text("+$hidden", style = TextStyle(color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold), maxLines = 1, modifier = GlanceModifier.padding(end = 3.dp))
+        }
     }
 }
 
-/** One row of bars: gaps as blank width, each event across its days (long events as one bar). */
+/** One row of bars: each event across its days (long events as one bar); a free day is a blank that opens it. */
 @Composable
-private fun LaneRow(context: Context, d: MonthData, segments: List<WeekSegment>, colW: Dp) {
+private fun LaneRow(context: Context, d: MonthData, week: List<LocalDate>, segments: List<WeekSegment>, colW: Dp) {
     Row(GlanceModifier.fillMaxWidth().height(LANE_H)) {
         var col = 0
         segments.forEach { s ->
-            if (s.startCol > col) Spacer(GlanceModifier.width(colW * (s.startCol - col)))
-            Bar(context, d, s, colW * (s.endCol - s.startCol + 1))
+            while (col < s.startCol) { FreeDay(context, week[col], colW); col++ }
+            Bar(context, d, s, colW * (s.endCol - s.startCol + 1), week[s.startCol])
             col = s.endCol + 1
         }
+        while (col < 7) { FreeDay(context, week[col], colW); col++ }
     }
 }
 
 @Composable
-private fun Bar(context: Context, d: MonthData, s: WeekSegment, width: Dp) {
+private fun FreeDay(context: Context, day: LocalDate, colW: Dp) {
+    Box(GlanceModifier.width(colW).height(LANE_H).clickable(open(context, OpenRequest.Day(day)))) {}
+}
+
+@Composable
+private fun Bar(context: Context, d: MonthData, s: WeekSegment, width: Dp, day: LocalDate) {
     val o = s.occurrence
     val faded = o.lastDay < d.month.firstDay || o.firstDay > d.month.plusMonths(1).firstDay.plus(-1, DateTimeUnit.DAY)
     val filled = o.allDay || s.spansDays
     Box(
         GlanceModifier.width(width).height(LANE_H).padding(horizontal = 1.dp, vertical = 1.dp)
-            .clickable(open(context, OpenRequest.Event(o.eventId, o.begin.toEpochMilliseconds()))),
+            // A bar is part of its day: it opens the day (its events listed), as tapping the number does.
+            .clickable(open(context, OpenRequest.Day(day))),
     ) {
         Row(
             GlanceModifier.fillMaxSize().then(if (filled) GlanceModifier.background(softFill(o.colorArgb, faded)).cornerRadius(4.dp) else GlanceModifier),
@@ -327,7 +336,7 @@ private fun Bar(context: Context, d: MonthData, s: WeekSegment, width: Dp) {
             if (!filled) Box(GlanceModifier.width(2.dp).fillMaxHeight().background(solid(o.colorArgb, faded))) {}
             Text(
                 o.title.ifBlank { "(제목 없음)" },
-                style = TextStyle(color = if (faded) Faint else OnBg, fontSize = 10.sp),
+                style = TextStyle(color = if (faded) Faint else OnBg, fontSize = 12.sp),
                 maxLines = 1, modifier = GlanceModifier.padding(start = 3.dp),
             )
         }

@@ -255,7 +255,7 @@ internal fun AddButton(context: Context, day: LocalDate, size: androidx.compose.
         GlanceModifier.size(size).background(Clay).cornerRadius(size / 2).clickable(open(context, OpenRequest.NewEvent(day))),
         contentAlignment = Alignment.Center,
     ) {
-        Text("+", style = TextStyle(color = OnClay, fontSize = 18.sp, fontWeight = androidx.glance.text.FontWeight.Bold))
+        Text("+", style = TextStyle(color = OnClay, fontSize = if (size >= 36.dp) 22.sp else 18.sp, fontWeight = androidx.glance.text.FontWeight.Bold))
     }
 }
 
@@ -270,7 +270,7 @@ internal fun StatusLine(context: Context, text: String, alert: Boolean) {
         ) {
             Box(GlanceModifier.size(7.dp).background(if (alert) Holiday else Ok).cornerRadius(4.dp)) {}
             Spacer(GlanceModifier.width(6.dp))
-            Text(text, style = TextStyle(color = if (alert) Holiday else Muted, fontSize = 12.sp), maxLines = 1)
+            Text(text, style = TextStyle(color = if (alert) Holiday else Muted, fontSize = 13.sp), maxLines = 1)
         }
     }
 }
