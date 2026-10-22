@@ -79,7 +79,7 @@ class MonthWidget : GlanceAppWidget() {
         provideContent {
             val offset = offsetOf(currentState())
             val d = rememberWidgetData(first, key = offset) { loadMonth(context, offset) }
-            MonthContent(context, d)
+            Styled(d.background) { MonthContent(context, d) }
         }
     }
 
@@ -186,7 +186,7 @@ private fun MonthContent(context: Context, d: MonthData) {
     val weekH = gridH / d.weeks.size.coerceAtLeast(1)
     // As many bar rows as the week has room for: 2 on 4×4, 3 on 4×5 (docs/13 §3 W2).
     val lanes = ((weekH - NUMBER_H) / LANE_H).toInt().coerceIn(1, if (tall) 3 else 2)
-    Column(GlanceModifier.fillMaxSize().background(widgetBg(d.background)).widgetShape().padding(horizontal = PAD_H, vertical = 8.dp)) {
+    Column(GlanceModifier.fillMaxSize().background(widgetBg()).widgetShape().padding(horizontal = PAD_H, vertical = 8.dp)) {
         MonthHeader(context, d)
         Row(GlanceModifier.fillMaxWidth().height(WEEKDAY_H)) {
             weekHeader(d.weekStart).forEach { w ->

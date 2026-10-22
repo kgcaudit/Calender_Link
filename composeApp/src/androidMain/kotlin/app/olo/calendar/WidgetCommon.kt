@@ -199,30 +199,44 @@ internal fun calendarGranted(context: Context) =
 
 internal fun nextMidnight(today: LocalDate, zone: TimeZone) = today.plus(1, DateTimeUnit.DAY).atStartOfDayIn(zone).toEpochMilliseconds()
 
-// OLO's tokens (design/Theme.kt), light and dark.
-internal val Bg = ColorProvider(day = Color(0xFFFBF9F5), night = Color(0xFF1C1A16))
-internal val OnBg = ColorProvider(day = Color(0xFF1D1A16), night = Color(0xFFE8E3DA))
-internal val Muted = ColorProvider(day = Color(0xFF574D45), night = Color(0xFFCFC5B9))
-internal val Faint = ColorProvider(day = Color(0xFFB4A99E), night = Color(0xFF6A6058))
-internal val Clay = ColorProvider(day = Color(0xFFB95B3B), night = Color(0xFFE8A183))
-internal val OnClay = ColorProvider(day = Color.White, night = Color(0xFF4A1E0C))
-internal val Holiday = ColorProvider(day = Color(0xFFA50E2E), night = Color(0xFFFFB0BE))
-internal val Saturday = ColorProvider(day = Color(0xFF3D6FB0), night = Color(0xFF9DBEEB))
-internal val Ok = ColorProvider(day = Color(0xFF2F6B4F), night = Color(0xFF8FD1AE))
-internal val Divider = ColorProvider(day = Color(0xFFE7E1D6), night = Color(0xFF2E2A25))
+// OLO's tokens (design/Theme.kt), light and dark; a widget set to 밝게/어둡게 keeps one of them.
+internal val Bg: FixedColor @Composable get() = tone(0xFFFBF9F5, 0xFF1C1A16)
+internal val OnBg: FixedColor @Composable get() = tone(0xFF1D1A16, 0xFFE8E3DA)
+internal val Muted: FixedColor @Composable get() = tone(0xFF574D45, 0xFFCFC5B9)
+internal val Faint: FixedColor @Composable get() = tone(0xFFB4A99E, 0xFF6A6058)
+internal val Clay: FixedColor @Composable get() = tone(0xFFB95B3B, 0xFFE8A183)
+internal val OnClay: FixedColor @Composable get() = tone(0xFFFFFFFF, 0xFF4A1E0C)
+internal val Holiday: FixedColor @Composable get() = tone(0xFFA50E2E, 0xFFFFB0BE)
+internal val Saturday: FixedColor @Composable get() = tone(0xFF3D6FB0, 0xFF9DBEEB)
+internal val Ok: FixedColor @Composable get() = tone(0xFF2F6B4F, 0xFF8FD1AE)
+internal val Divider: FixedColor @Composable get() = tone(0xFFE7E1D6, 0xFF2E2A25)
 /** The plain card behind a timed event (docs/13 §2-2). */
-internal val Plain = ColorProvider(day = Color(0xFFF1ECE5), night = Color(0xFF29251F))
-internal val Pill = ColorProvider(day = Color(0xFFF1ECE5), night = Color(0xFF29251F))
+internal val Plain: FixedColor @Composable get() = tone(0xFFF1ECE5, 0xFF29251F)
+internal val Pill: FixedColor @Composable get() = Plain
 
-/** The widget's card, as see-through as the person chose (설정 > 위젯 > 배경). */
-internal fun widgetBg(b: WidgetBackground) =
-    if (b == WidgetBackground.SOLID) Bg else ColorProvider(day = Color(0xFFFBF9F5).copy(alpha = b.alpha), night = Color(0xFF1C1A16).copy(alpha = b.alpha))
+@Composable
+private fun tone(day: Long, night: Long, alpha: Float = 1f): FixedColor = tone(Color(day).copy(alpha = alpha), Color(night).copy(alpha = alpha))
+
+@Composable
+private fun tone(day: Color, night: Color): FixedColor = when (LocalWidgetStyle.current.theme) {
+    WidgetTheme.SYSTEM -> ColorProvider(day = day, night = night)
+    WidgetTheme.LIGHT -> FixedColor(day)
+    WidgetTheme.DARK -> FixedColor(night)
+}
+
+/** The widget's card: off, or as opaque as its 위젯 설정 says (docs/13 §8). */
+@Composable
+internal fun widgetBg(): FixedColor {
+    val s = LocalWidgetStyle.current
+    return if (!s.background) FixedColor(Color.Transparent) else tone(0xFFFBF9F5, 0xFF1C1A16, s.opacity / 100f)
+}
 
 /** A calendar colour filled softly behind an all-day event, stronger at night so it still reads. */
+@Composable
 internal fun softFill(argb: Int, faded: Boolean = false): FixedColor {
     val c = Color(argb)
     val k = if (faded) 0.45f else 1f
-    return ColorProvider(day = c.copy(alpha = 0.28f * k), night = c.copy(alpha = 0.45f * k))
+    return tone(day = c.copy(alpha = 0.28f * k), night = c.copy(alpha = 0.45f * k))
 }
 
 internal fun solid(argb: Int, faded: Boolean = false) = FixedColor(Color(argb).copy(alpha = if (faded) 0.45f else 1f))

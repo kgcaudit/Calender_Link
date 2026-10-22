@@ -62,7 +62,7 @@ class NextWidget : GlanceAppWidget() {
         Widgets.scheduleTick(context, first.nextTickMillis)
         provideContent {
             val d = rememberWidgetData(first) { loadNext(context).also { Widgets.scheduleTick(context, it.nextTickMillis) } }
-            NextContent(context, d)
+            Styled(d.background) { NextContent(context, d) }
         }
     }
 
@@ -138,7 +138,7 @@ private fun NextContent(context: Context, d: NextData) {
         else -> OpenRequest.Event(e.eventId, e.begin.toEpochMilliseconds())
     }
     Column(
-        GlanceModifier.fillMaxSize().background(widgetBg(d.background)).widgetShape().padding(horizontal = 14.dp, vertical = 10.dp),
+        GlanceModifier.fillMaxSize().background(widgetBg()).widgetShape().padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(GlanceModifier.fillMaxWidth().clickable(open(context, target)), verticalAlignment = Alignment.CenterVertically) {

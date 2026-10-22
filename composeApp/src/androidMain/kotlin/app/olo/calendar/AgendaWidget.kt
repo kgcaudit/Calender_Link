@@ -66,7 +66,7 @@ class AgendaWidget : GlanceAppWidget() {
         Widgets.scheduleTick(context, first.nextTickMillis)
         provideContent {
             val d = rememberWidgetData(first) { loadAgenda(context).also { Widgets.scheduleTick(context, it.nextTickMillis) } }
-            AgendaContent(context, d)
+            Styled(d.background) { AgendaContent(context, d) }
         }
     }
 
@@ -146,7 +146,7 @@ private fun AgendaContent(context: Context, d: AgendaData) {
     val size = LocalSize.current
     val wide = size.width >= AgendaWidget.WIDE.width
     val tall = size.height >= AgendaWidget.TALL.height
-    Column(GlanceModifier.fillMaxSize().background(widgetBg(d.background)).widgetShape().padding(horizontal = 14.dp, vertical = 12.dp)) {
+    Column(GlanceModifier.fillMaxSize().background(widgetBg()).widgetShape().padding(horizontal = 14.dp, vertical = 12.dp)) {
         Row(GlanceModifier.fillMaxWidth().padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(GlanceModifier.defaultWeight().clickable(open(context, OpenRequest.Day(d.today)))) {
                 Text(
