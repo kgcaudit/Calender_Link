@@ -2,13 +2,7 @@ package app.olo.calendar
 
 import android.content.Context
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.Preferences
@@ -29,18 +23,17 @@ import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.state.getAppWidgetState
 import androidx.glance.appwidget.state.updateAppWidgetState
 import androidx.glance.background
-import androidx.glance.color.ColorProvider
 import androidx.glance.currentState
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
+import androidx.glance.layout.fillMaxHeight
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
-import androidx.glance.layout.size
 import androidx.glance.layout.width
 import androidx.glance.state.GlanceStateDefinition
 import androidx.glance.state.PreferencesGlanceStateDefinition
@@ -48,20 +41,19 @@ import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
-import androidx.glance.unit.ColorProvider
-import app.olo.calendar.model.MonthCell
-import app.olo.calendar.model.WidgetBackground
+import app.olo.calendar.model.KoreanLunar
 import app.olo.calendar.model.Occurrence
+import app.olo.calendar.model.WeekSegment
+import app.olo.calendar.model.WidgetBackground
 import app.olo.calendar.model.YearMonth
 import app.olo.calendar.model.koShort
+import app.olo.calendar.model.layoutWeek
 import app.olo.calendar.model.loadSettings
 import app.olo.calendar.model.monthGrid
-import app.olo.calendar.model.monthWidgetWeeks
-import app.olo.calendar.model.on
-import app.olo.calendar.model.sortedForDay
 import app.olo.calendar.model.weekHeader
 import app.olo.calendar.ui.OpenRequest
-import app.olo.calendar.ui.clock
+import app.olo.calendar.ui.gridEvents
+import app.olo.calendar.ui.isHoliday
 import kotlinx.datetime.Clock
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.DayOfWeek
@@ -71,35 +63,27 @@ import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
 
 /**
- * W2, the month widget (docs/09 §3): the app's month grid with a dot per event,
- * ‹ › to turn months without opening OLO, and on 5×5 today's events underneath
- * (what Samsung's month widget leaves out). The month turned to is kept per
- * widget and goes back to this month the next day.
+ * W2, the month widget (docs/09 §3, docs/13 §3): the app's month grid with the
+ * events' titles as bars in each week (one bar across the days of a long event,
+ * "+N" for what does not fit), ‹ › to turn months without opening OLO. The
+ * number of bar rows follows the height: 2 on 4×4, 3 on 4×5.
  */
 class MonthWidget : GlanceAppWidget() {
-    override val sizeMode = SizeMode.Responsive(setOf(COMPACT, FULL, TALL))
+    // Exact: the bars are laid out by the real column width, not a size bucket's.
+    override val sizeMode = SizeMode.Exact
     override val stateDefinition: GlanceStateDefinition<*> = PreferencesGlanceStateDefinition
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val first = loadMonthData(context, offsetOf(getAppWidgetState(context, PreferencesGlanceStateDefinition, id)))
+        val first = loadMonth(context, offsetOf(getAppWidgetState(context, PreferencesGlanceStateDefinition, id)))
         Widgets.scheduleTick(context, first.nextTickMillis)
         provideContent {
             val offset = offsetOf(currentState())
-            var data by remember { mutableStateOf(first) }
-            // A turned page reloads only its month; the session keeps the rest.
-            LaunchedEffect(offset) { if (offset != data.offset) data = loadMonthData(context, offset) }
-            MonthContent(context, data)
+            val d = rememberWidgetData(first, key = offset) { loadMonth(context, offset) }
+            MonthContent(context, d)
         }
     }
 
     companion object {
-        /** 4×3: numbers and dots. */
-        val COMPACT = DpSize(250.dp, 160.dp)
-        /** 4×4: roomier rows. */
-        val FULL = DpSize(250.dp, 250.dp)
-        /** 5×5: lunar dates and today's events under the grid. */
-        val TALL = DpSize(300.dp, 330.dp)
-
         internal val OFFSET = intPreferencesKey("monthOffset")
         /** The day the page was turned on (epoch day): a later day starts from this month again. */
         internal val TURNED_ON = intPreferencesKey("turnedOn")
@@ -120,7 +104,7 @@ class MonthWidgetReceiver : GlanceAppWidgetReceiver() {
     }
 }
 
-/** ‹ / › / the title: turn the page by [STEP] months, 0 back to this month. */
+/** ‹ / › / the today chip: turn the page by [STEP] months, 0 back to this month. */
 class MonthStep : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val step = parameters[STEP] ?: 0
@@ -150,57 +134,60 @@ private class MonthData(
     val granted: Boolean,
     val month: YearMonth,
     val today: LocalDate,
+    val weeks: List<List<LocalDate>>,
     val weekStart: DayOfWeek,
-    val weeks: List<List<MonthCell>>,
-    val todayEvents: List<Occurrence>,
+    /** What the bars draw: the shown events, holiday calendars' names in rose (the app's [gridEvents]). */
+    val events: List<Occurrence>,
+    val red: Set<LocalDate>,
+    val lunar: Map<LocalDate, String>,
     val status: Pair<String, Boolean>?,
-    val use24: Boolean,
-    val zone: TimeZone,
     val nextTickMillis: Long,
     val background: WidgetBackground = WidgetBackground.SOLID,
 )
 
-private suspend fun loadMonthData(context: Context, offset: Int): MonthData {
+private suspend fun loadMonth(context: Context, offset: Int): MonthData {
     val zone = TimeZone.currentSystemDefault()
     val now = Clock.System.now()
     val today = now.toLocalDateTime(zone).date
     val month = YearMonth.of(today).plusMonths(offset)
-    val use24 = android.text.format.DateFormat.is24HourFormat(context)
     val midnight = nextMidnight(today, zone)
+    val settings = AndroidPreferences(context).loadSettings()
+    val grid = monthGrid(month, settings.weekStart)
+    val weeks = grid.chunked(7)
     if (!calendarGranted(context)) {
-        return MonthData(offset, false, month, today, DayOfWeek.SUNDAY, emptyList(), emptyList(), null, use24, zone, midnight)
+        return MonthData(offset, false, month, today, weeks, settings.weekStart, emptyList(), emptySet(), emptyMap(), null, midnight)
     }
-    val grid = monthGrid(month, AndroidPreferences(context).loadSettings().weekStart)
-    // The grid's days, and today (it may lie on another page) for the line underneath.
-    val from = minOf(grid.first(), today)
-    val to = maxOf(grid.last(), today).plus(1, DateTimeUnit.DAY)
-    val src = readWidgetSource(context, from, to, zone, now)
-    val weeks = monthWidgetWeeks(month, src.settings.weekStart, src.shown, src.holidayCalendars, today, src.settings.showLunar)
-    val todayEvents = src.shown.on(today).filter { it.calendarId !in src.holidayCalendars && (it.allDay || it.end > now) }.sortedForDay()
-    val nextEnd = todayEvents.filter { !it.allDay }.minOfOrNull { it.end.toEpochMilliseconds() }
-    return MonthData(offset, true, month, today, src.settings.weekStart, weeks, todayEvents, src.status, use24, zone, minOf(midnight, nextEnd ?: midnight), src.settings.widgetBackground)
+    val src = readWidgetSource(context, grid.first(), grid.last().plus(1, DateTimeUnit.DAY), zone, now)
+    val events = gridEvents(src.shown, src.holidayCalendars)
+    val red = grid.filter { it.dayOfWeek == DayOfWeek.SUNDAY || isHoliday(it, src.shown, src.holidayCalendars) }.toSet()
+    // The app's rule: Sundays and the lunar 1st and 15th.
+    val lunar = if (!src.settings.showLunar) emptyMap() else grid.mapNotNull { d ->
+        KoreanLunar.fromSolar(d)?.takeIf { d.dayOfWeek == DayOfWeek.SUNDAY || it.day == 1 || it.day == 15 }?.let { d to it.label() }
+    }.toMap()
+    return MonthData(offset, true, month, today, weeks, src.settings.weekStart, events, red, lunar, src.status, midnight, src.settings.widgetBackground)
 }
 
-private val TodayFill = ColorProvider(day = Color(0xFFB95B3B), night = Color(0xFFE8A183))
-private val Faint = ColorProvider(day = Color(0xFFB4A99E), night = Color(0xFF6A6058))
-private val Saturday = ColorProvider(day = Color(0xFF3D6FB0), night = Color(0xFF9DBEEB))
+private val PAD_H = 8.dp
+private val HEADER_H = 36.dp
+private val WEEKDAY_H = 18.dp
+private val NUMBER_H = 18.dp
+private val LANE_H = 15.dp
+private val MORE_H = 11.dp
+private val STATUS_H = 26.dp
 
 @Composable
 private fun MonthContent(context: Context, d: MonthData) {
     val size = LocalSize.current
-    val tall = size.height >= MonthWidget.TALL.height
-    val roomy = size.height >= MonthWidget.FULL.height
-    Column(GlanceModifier.fillMaxSize().background(widgetBg(d.background)).cornerRadius(20.dp).padding(horizontal = 10.dp, vertical = 8.dp)) {
+    val colW: Dp = (size.width - PAD_H * 2) / 7
+    // 4×5 and taller also has room for the bridge line.
+    val withStatus = d.status != null && size.height >= 380.dp
+    val gridH = size.height - 16.dp - HEADER_H - WEEKDAY_H - (if (withStatus) STATUS_H else 0.dp)
+    val weekH = gridH / d.weeks.size.coerceAtLeast(1)
+    // As many bar rows as the week has room for: 2 on 4×4, 3 on 4×5 (docs/13 §3 W2).
+    val lanes = ((weekH - NUMBER_H - MORE_H) / LANE_H).toInt().coerceIn(1, if (size.height >= 380.dp) 3 else 2)
+    Column(GlanceModifier.fillMaxSize().background(widgetBg(d.background)).widgetShape().padding(horizontal = PAD_H, vertical = 8.dp)) {
         MonthHeader(context, d)
-        if (!d.granted) {
-            Text(
-                "OLO를 열어 캘린더 권한을 허용해 주세요",
-                style = TextStyle(color = Muted, fontSize = 13.sp),
-                modifier = GlanceModifier.padding(top = 8.dp).clickable(open(context, OpenRequest.Day(d.today))),
-            )
-            return@Column
-        }
-        Row(GlanceModifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Row(GlanceModifier.fillMaxWidth().height(WEEKDAY_H)) {
             weekHeader(d.weekStart).forEach { w ->
                 Text(
                     w.koShort(),
@@ -208,117 +195,141 @@ private fun MonthContent(context: Context, d: MonthData) {
                         color = when (w) { DayOfWeek.SUNDAY -> Holiday; DayOfWeek.SATURDAY -> Saturday; else -> Muted },
                         fontSize = 11.sp, textAlign = TextAlign.Center,
                     ),
-                    modifier = GlanceModifier.defaultWeight(),
+                    modifier = GlanceModifier.width(colW),
                 )
             }
         }
+        Box(GlanceModifier.fillMaxWidth().height(1.dp).background(Divider)) {}
+        if (!d.granted) { NoPermission(context, d.today); return@Column }
         Column(GlanceModifier.fillMaxWidth().defaultWeight()) {
-            d.weeks.forEach { week ->
-                Row(GlanceModifier.fillMaxWidth().defaultWeight()) {
-                    week.forEach { c -> DayCell(context, c, roomy, tall) }
-                }
-            }
+            d.weeks.forEach { week -> WeekView(context, d, week, colW, weekH, lanes) }
         }
-        if (tall) TodayLine(context, d)
-        if (tall) d.status?.let { (text, alert) -> StatusLine(context, text, alert) }
+        if (withStatus) d.status?.let { (text, alert) -> StatusLine(context, text, alert) }
     }
 }
 
 @Composable
 private fun MonthHeader(context: Context, d: MonthData) {
-    Row(GlanceModifier.fillMaxWidth().padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Arrow(context, "‹", -1)
-        // The title opens the app on this month; turned away, it first comes back to today.
+    Row(GlanceModifier.fillMaxWidth().height(HEADER_H), verticalAlignment = Alignment.CenterVertically) {
+        Arrow("‹", -1)
         Text(
-            "${d.month.year}년 ${d.month.month}월",
-            style = TextStyle(color = OnBg, fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center),
-            modifier = GlanceModifier.defaultWeight().clickable(
-                if (d.offset != 0) actionRunCallback<MonthStep>(actionParametersOf(MonthStep.STEP to 0))
-                else open(context, OpenRequest.Day(d.today)),
-            ),
+            "${d.month.month}월",
+            style = TextStyle(color = OnBg, fontSize = 17.sp, fontWeight = FontWeight.Bold),
+            modifier = GlanceModifier.clickable(open(context, OpenRequest.Day(if (d.offset == 0) d.today else d.month.firstDay))),
         )
-        Arrow(context, "›", 1)
-        Spacer(GlanceModifier.width(6.dp))
+        Arrow("›", 1)
+        Text("${d.month.year}", style = TextStyle(color = Faint, fontSize = 11.sp), modifier = GlanceModifier.padding(start = 2.dp))
+        Spacer(GlanceModifier.defaultWeight())
+        // Today's number: back to this month, or (already here) open OLO on today.
         Box(
-            GlanceModifier.size(28.dp).background(Clay).cornerRadius(14.dp).clickable(open(context, OpenRequest.NewEvent(d.today))),
+            GlanceModifier.height(24.dp).width(30.dp).background(Divider).cornerRadius(6.dp).clickable(
+                if (d.offset != 0) actionRunCallback<MonthStep>(actionParametersOf(MonthStep.STEP to 0)) else open(context, OpenRequest.Day(d.today)),
+            ),
             contentAlignment = Alignment.Center,
         ) {
-            Text("+", style = TextStyle(color = OnClay, fontSize = 17.sp, fontWeight = FontWeight.Bold))
+            Text("${d.today.dayOfMonth}", style = TextStyle(color = OnBg, fontSize = 12.sp, fontWeight = FontWeight.Bold))
         }
+        Spacer(GlanceModifier.width(8.dp))
+        AddButton(context, d.today, 28.dp)
     }
 }
 
 @Composable
-private fun Arrow(context: Context, glyph: String, step: Int) {
+private fun Arrow(glyph: String, step: Int) {
     Box(
-        GlanceModifier.size(32.dp).clickable(actionRunCallback<MonthStep>(actionParametersOf(MonthStep.STEP to step))),
+        GlanceModifier.width(30.dp).height(32.dp).clickable(actionRunCallback<MonthStep>(actionParametersOf(MonthStep.STEP to step))),
         contentAlignment = Alignment.Center,
     ) {
         Text(glyph, style = TextStyle(color = Clay, fontSize = 20.sp, fontWeight = FontWeight.Bold))
     }
 }
 
+/** One week: the day numbers, [lanes] rows of bars, then "+N" where some did not fit. */
 @Composable
-private fun androidx.glance.layout.RowScope.DayCell(context: Context, c: MonthCell, roomy: Boolean, tall: Boolean) {
-    val number = when {
-        c.isToday -> OnClay
-        !c.inMonth -> Faint
-        c.red -> Holiday
-        c.date.dayOfWeek == DayOfWeek.SATURDAY -> Saturday
-        else -> OnBg
-    }
-    Column(
-        GlanceModifier.defaultWeight().fillMaxSize().clickable(open(context, OpenRequest.Day(c.date))),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        val circle = if (roomy) 22.dp else 18.dp
-        Box(
-            GlanceModifier.size(circle).then(if (c.isToday) GlanceModifier.background(TodayFill).cornerRadius(circle / 2) else GlanceModifier),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                c.date.dayOfMonth.toString(),
-                style = TextStyle(color = number, fontSize = if (roomy) 13.sp else 11.sp, fontWeight = if (c.isToday) FontWeight.Bold else FontWeight.Normal),
-            )
+private fun WeekView(context: Context, d: MonthData, week: List<LocalDate>, colW: Dp, weekH: Dp, lanes: Int) {
+    val layout = layoutWeek(week, d.events, lanes) { false }
+    Column(GlanceModifier.fillMaxWidth().height(weekH)) {
+        Row(GlanceModifier.fillMaxWidth().height(NUMBER_H)) {
+            week.forEach { day -> DayNumber(context, d, day, colW) }
         }
-        if (tall && c.lunar != null) Text(c.lunar, style = TextStyle(color = Faint, fontSize = 8.sp))
-        if (c.dots.isNotEmpty()) {
-            Row(GlanceModifier.padding(top = 1.dp), verticalAlignment = Alignment.CenterVertically) {
-                c.dots.forEach { argb ->
-                    Box(GlanceModifier.padding(horizontal = 1.dp).size(4.dp).background(ColorProvider(Color(argb).copy(alpha = if (c.inMonth) 1f else 0.4f))).cornerRadius(2.dp)) {}
+        for (lane in 0 until lanes) {
+            LaneRow(context, d, layout.segments.filter { it.lane == lane }.sortedBy { it.startCol }, colW)
+        }
+        if (layout.hiddenPerDay.any { it > 0 }) {
+            Row(GlanceModifier.fillMaxWidth().height(MORE_H)) {
+                layout.hiddenPerDay.forEachIndexed { i, n ->
+                    Text(
+                        if (n > 0) "+$n" else "",
+                        style = TextStyle(color = Muted, fontSize = 9.sp, textAlign = TextAlign.Center),
+                        modifier = GlanceModifier.width(colW).clickable(open(context, OpenRequest.Day(week[i]))),
+                    )
                 }
             }
+        }
+        Spacer(GlanceModifier.defaultWeight())
+        Box(GlanceModifier.fillMaxWidth().height(1.dp).background(Divider)) {}
+    }
+}
+
+@Composable
+private fun DayNumber(context: Context, d: MonthData, day: LocalDate, colW: Dp) {
+    val inMonth = day.monthNumber == d.month.month
+    val isToday = day == d.today
+    val color = when {
+        isToday -> OnClay
+        !inMonth -> Faint
+        day in d.red -> Holiday
+        day.dayOfWeek == DayOfWeek.SATURDAY -> Saturday
+        else -> OnBg
+    }
+    Row(
+        GlanceModifier.width(colW).fillMaxHeight().padding(start = 3.dp).clickable(open(context, OpenRequest.Day(day))),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Today: the app's Clay tile behind the number.
+        Box(
+            GlanceModifier.height(16.dp).padding(horizontal = 3.dp).then(if (isToday) GlanceModifier.background(Clay).cornerRadius(4.dp) else GlanceModifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("${day.dayOfMonth}", style = TextStyle(color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+        }
+        if (colW >= 44.dp) d.lunar[day]?.let { Text(it, style = TextStyle(color = Faint, fontSize = 8.sp), maxLines = 1) }
+    }
+}
+
+/** One row of bars: gaps as blank width, each event across its days (long events as one bar). */
+@Composable
+private fun LaneRow(context: Context, d: MonthData, segments: List<WeekSegment>, colW: Dp) {
+    Row(GlanceModifier.fillMaxWidth().height(LANE_H)) {
+        var col = 0
+        segments.forEach { s ->
+            if (s.startCol > col) Spacer(GlanceModifier.width(colW * (s.startCol - col)))
+            Bar(context, d, s, colW * (s.endCol - s.startCol + 1))
+            col = s.endCol + 1
         }
     }
 }
 
-/** 5×5: today's events in a line or two (Samsung's month widget has no such line). */
 @Composable
-private fun TodayLine(context: Context, d: MonthData) {
-    val items = d.todayEvents
-    Column(GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
-        Box(GlanceModifier.fillMaxWidth().height(1.dp).background(Divider)) {}
-        if (items.isEmpty()) {
+private fun Bar(context: Context, d: MonthData, s: WeekSegment, width: Dp) {
+    val o = s.occurrence
+    val faded = o.lastDay < d.month.firstDay || o.firstDay > d.month.plusMonths(1).firstDay.plus(-1, DateTimeUnit.DAY)
+    val filled = o.allDay || s.spansDays
+    Box(
+        GlanceModifier.width(width).height(LANE_H).padding(horizontal = 1.dp, vertical = 1.dp)
+            .clickable(open(context, OpenRequest.Event(o.eventId, o.begin.toEpochMilliseconds()))),
+    ) {
+        Row(
+            GlanceModifier.fillMaxSize().then(if (filled) GlanceModifier.background(softFill(o.colorArgb, faded)).cornerRadius(4.dp) else GlanceModifier),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // A timed event: a thin strip in its colour, no fill (docs/13 §2-2).
+            if (!filled) Box(GlanceModifier.width(2.dp).fillMaxHeight().background(solid(o.colorArgb, faded))) {}
             Text(
-                "오늘 남은 일정 없음",
-                style = TextStyle(color = Muted, fontSize = 12.sp),
-                modifier = GlanceModifier.padding(top = 4.dp).clickable(open(context, OpenRequest.NewEvent(d.today))),
+                o.title.ifBlank { "(제목 없음)" },
+                style = TextStyle(color = if (faded) Faint else OnBg, fontSize = 10.sp),
+                maxLines = 1, modifier = GlanceModifier.padding(start = 3.dp),
             )
-        }
-        items.take(2).forEachIndexed { i, o ->
-            val time = if (o.allDay) "종일" else clock(o.begin.toLocalDateTime(d.zone).time, d.use24)
-            val more = if (i == 1 && items.size > 2) " 외 ${items.size - 2}개" else ""
-            Row(
-                GlanceModifier.fillMaxWidth().padding(top = 4.dp).clickable(open(context, OpenRequest.Event(o.eventId, o.begin.toEpochMilliseconds()))),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(GlanceModifier.width(4.dp).height(14.dp).background(ColorProvider(Color(o.colorArgb))).cornerRadius(2.dp)) {}
-                Spacer(GlanceModifier.width(6.dp))
-                Text(
-                    (if (i == 0) "오늘 " else "") + "$time  " + o.title.ifBlank { "(제목 없음)" } + more,
-                    style = TextStyle(color = OnBg, fontSize = 12.sp), maxLines = 1,
-                )
-            }
         }
     }
 }

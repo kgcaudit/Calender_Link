@@ -106,4 +106,19 @@ class AgendaTest {
         p.saveSettings(s)
         assertEquals(app.olo.calendar.model.WidgetBackground.HALF, p.loadSettings().widgetBackground)
     }
+
+    @Test
+    fun theSmallWidgetSaysWhenInThreeLines() {
+        val now = today.at(LocalTime(11, 41), zone)
+        val cpr = timed("심폐소생술 교육", today, 10, 12)
+        val dinner = timed("현정 저녁 모임", today, 19, 21)
+        val movie = timed("영화", today.plus(1, DateTimeUnit.DAY), 19, 21)
+        assertEquals(listOf("심폐소생술 교육", "현정 저녁 모임"), app.olo.calendar.model.upcoming(listOf(movie, dinner, cpr), emptySet(), today, now, 2).map { it.title })
+        assertEquals("진행 중 · 오후 12:00 종료", app.olo.calendar.model.whenLabelKo(cpr, now, today, zone, use24 = false))
+        assertEquals("오늘 · 7시간 후", app.olo.calendar.model.whenLabelKo(dinner, now, today, zone, use24 = false))
+        assertEquals("내일", app.olo.calendar.model.whenLabelKo(movie, now, today, zone, use24 = false))
+        assertEquals("오후 7:00 – 9:00", app.olo.calendar.model.rangeKo(dinner, zone, use24 = false))
+        assertEquals("오전 10:00 – 오후 12:00", app.olo.calendar.model.rangeKo(cpr, zone, use24 = false))
+        assertEquals("19:00 – 21:00", app.olo.calendar.model.rangeKo(dinner, zone, use24 = true))
+    }
 }

@@ -96,5 +96,47 @@ fun untilKo(o: Occurrence, now: Instant, today: LocalDate, zone: kotlinx.datetim
 fun dayLabelKo(day: LocalDate, today: LocalDate): String =
     if (day == today.plus(1, DateTimeUnit.DAY)) "내일" else "${day.monthNumber}월 ${day.dayOfMonth}일 (${day.dayOfWeek.koShort()})"
 
+/**
+ * The small widget's events (docs/13 §3 W3): [nextUp] first, then the timed
+ * events that start after it, [count] in all.
+ */
+fun upcoming(shown: List<Occurrence>, holidayCalendars: Set<String>, today: LocalDate, now: Instant, count: Int): List<Occurrence> {
+    val first = nextUp(shown, holidayCalendars, today, now) ?: return emptyList()
+    val until = today.plus(WIDGET_DAYS, DateTimeUnit.DAY)
+    val after = shown.filter { it.calendarId !in holidayCalendars && !it.allDay && it.begin > first.begin && it.firstDay < until && it != first }
+        .sortedBy { it.begin }
+    return (listOf(first) + after).take(count)
+}
+
+/** "오후 7:00 – 9:00" (one 오전/오후 when both share it), "19:00 – 21:00", or "종일". */
+fun rangeKo(o: Occurrence, zone: kotlinx.datetime.TimeZone, use24: Boolean): String {
+    if (o.allDay) return "종일"
+    val s = o.begin.toLocalDateTime(zone)
+    val e = o.end.toLocalDateTime(zone)
+    fun hm(h: Int, m: Int) = if (use24) "${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}" else "${(h % 12).let { if (it == 0) 12 else it }}:${m.toString().padStart(2, '0')}"
+    fun half(h: Int) = if (h < 12) "오전 " else "오후 "
+    val start = (if (use24) "" else half(s.hour)) + hm(s.hour, s.minute)
+    val sameHalf = !use24 && (s.hour < 12) == (e.hour < 12) && s.date == e.date
+    val end = (if (e.date != s.date) "${e.date.monthNumber}/${e.date.dayOfMonth} " else "") +
+        (if (use24 || sameHalf) "" else half(e.hour)) + hm(e.hour, e.minute)
+    return "$start – $end"
+}
+
+/**
+ * The small widget's first line: "오늘 · 7시간 후", "진행 중 · 오후 12:00 종료",
+ * "오늘 · 종일", "내일", "10월 24일 (토)".
+ */
+fun whenLabelKo(o: Occurrence, now: Instant, today: LocalDate, zone: kotlinx.datetime.TimeZone, use24: Boolean): String {
+    if (o.allDay) return if (today in o.firstDay..o.lastDay) "오늘 · 종일" else dayLabelKo(o.firstDay, today)
+    if (o.begin <= now) {
+        val e = o.end.toLocalDateTime(zone)
+        val clock = if (use24) "${e.hour.toString().padStart(2, '0')}:${e.minute.toString().padStart(2, '0')}"
+        else (if (e.hour < 12) "오전 " else "오후 ") + "${(e.hour % 12).let { if (it == 0) 12 else it }}:${e.minute.toString().padStart(2, '0')}"
+        return "진행 중 · $clock 종료"
+    }
+    val day = o.begin.toLocalDateTime(zone).date
+    return if (day == today) "오늘 · ${untilKo(o, now, today, zone)}" else dayLabelKo(day, today)
+}
+
 /** How far ahead the widget lists (docs/09 §8 D). */
 const val WIDGET_DAYS = 14
