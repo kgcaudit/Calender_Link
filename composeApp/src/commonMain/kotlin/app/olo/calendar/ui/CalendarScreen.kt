@@ -1,5 +1,9 @@
 package app.olo.calendar.ui
 
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.draw.drawWithContent
 import app.olo.calendar.design.OloMotion
 import app.olo.calendar.model.eulReul
 import app.olo.calendar.model.icsFileName
@@ -457,38 +461,136 @@ private fun TopBar(
 }
 
 /**
- * "2027년 1월" in one face, size and colour. A change of title is a horizontal
- * card flip: the old face turns edge-on, the new one turns in from the other
- * side, in the direction the month pages moved.
+ * "2027년 1월" in one face, size and colour, as a split-flap board (a table
+ * tennis or tennis scorecard): when the title changes, each character that
+ * changed folds over at its horizontal midline, one after another. Forward
+ * (a later month) the top half falls down onto the new one; back, the bottom
+ * half rises. Characters that stay (the year, mostly) stay still.
  */
 @Composable
-private fun FlipTitle(title: String, order: Int) {
+internal fun FlipTitle(title: String, order: Int) {
     var face by remember { mutableStateOf(title) }
+    var from by remember { mutableStateOf(title) }
+    var forward by remember { mutableStateOf(true) }
     var lastOrder by remember { mutableStateOf(order) }
-    val turn = remember { androidx.compose.animation.core.Animatable(0f) }
+    val run = remember { androidx.compose.animation.core.Animatable(1f) }
+    // Card by card: numbers line up from the right ("9" under "10"), so "월" stays put.
+    val pairs = flapCells(from, face)
+    val flipping = pairs.count { it.first != it.second }
+    val total = FLAP_MS + FLAP_STAGGER_MS * (flipping - 1).coerceAtLeast(0)
     LaunchedEffect(title) {
-        // Back to the shown title mid-turn (a swipe and straight back): just turn upright again.
-        if (title == face) { turn.animateTo(0f, tween(OloMotion.Short)); return@LaunchedEffect }
-        val dir = if (order >= lastOrder) -1f else 1f
-        lastOrder = order
-        turn.animateTo(90f * dir, tween(OloMotion.Quick, easing = OloMotion.EmphasizedAccelerate))
+        if (title == face) return@LaunchedEffect
+        // Mid-flip, the flap starts again from what is half shown.
+        from = if (run.value < 0.5f) from else face
         face = title
-        turn.snapTo(-90f * dir)
-        turn.animateTo(0f, tween(OloMotion.Short, easing = OloMotion.EmphasizedDecelerate))
+        forward = order >= lastOrder
+        lastOrder = order
+        run.snapTo(0f)
+        val n = flapCells(from, face).count { it.first != it.second }
+        run.animateTo(1f, tween(FLAP_MS + FLAP_STAGGER_MS * (n - 1).coerceAtLeast(0), easing = androidx.compose.animation.core.LinearEasing))
     }
+    val style = MaterialTheme.typography.headlineSmall.copy(fontFeatureSettings = "tnum", fontWeight = FontWeight.Bold)
     val density = androidx.compose.ui.platform.LocalDensity.current.density
+    Row(Modifier.clearAndSetSemantics { contentDescription = face }) {
+        var rank = 0
+        for ((old, new) in pairs) {
+            if (old == new || run.value >= 1f) {
+                if (new.isNotEmpty()) Text(new, style = style, maxLines = 1)
+                continue
+            }
+            val start = FLAP_STAGGER_MS * rank++ / total.toFloat()
+            val p = ((run.value - start) / (FLAP_MS / total.toFloat())).coerceIn(0f, 1f)
+            FlapCell(old, new, androidx.compose.animation.core.FastOutSlowInEasing.transform(p), forward, style, density)
+        }
+    }
+}
+
+/** One character of [FlipTitle] mid-flip: two static halves and the half that folds over the midline. */
+@Composable
+private fun FlapCell(old: String, new: String, p: Float, forward: Boolean, style: androidx.compose.ui.text.TextStyle, density: Float) {
+    // Forward: top half of [old] falls (0 → -90°), then the bottom half of [new] lands (90° → 0).
+    // Back: the bottom half of [old] rises, then the top half of [new] comes down from above.
+    val first = p < 0.5f
+    val angle = if (first) p * 2f * 90f else (1f - (p - 0.5f) * 2f) * 90f
+    Box(contentAlignment = Alignment.Center) {
+        // Sizes the cell to the wider face, so nothing jumps while it turns.
+        Text(if (new.length >= old.length && new.isNotEmpty()) new else old.ifEmpty { new }, style = style, maxLines = 1, modifier = Modifier.alpha(0f))
+        FlapHalf(if (forward) new else old, top = true, style)
+        FlapHalf(if (forward) old else new, top = false, style)
+        // A blank card (a digit that was not there) still covers what is behind it.
+        val sizer = new.ifEmpty { old }
+        if (first) {
+            FlapHalf(old, top = forward, style, rotation = if (forward) -angle else angle, density = density, sizer = sizer, flap = true)
+        } else {
+            FlapHalf(new, top = !forward, style, rotation = if (forward) angle else -angle, density = density, sizer = sizer, flap = true)
+        }
+    }
+}
+
+/** The top or bottom half of a character, folding on the midline by [rotation] degrees (around the X axis). */
+@Composable
+private fun FlapHalf(
+    text: String,
+    top: Boolean,
+    style: androidx.compose.ui.text.TextStyle,
+    rotation: Float = 0f,
+    density: Float = 1f,
+    /** A blank card is drawn at this character's size. */
+    sizer: String = text,
+    /** The turning half: drawn even when blank, so it covers what is behind it. */
+    flap: Boolean = false,
+) {
+    if (text.isEmpty() && !flap) return
     Text(
-        face,
-        // Tabular figures: 01–12 keep the same width, so the title never shifts.
-        style = MaterialTheme.typography.headlineSmall.copy(fontFeatureSettings = "tnum"),
-        fontWeight = FontWeight.Bold,
-        maxLines = 1,
-        modifier = Modifier.graphicsLayer {
-            rotationY = turn.value
-            cameraDistance = 16f * density
-        },
+        text.ifEmpty { sizer }, style = style, maxLines = 1,
+        color = if (text.isEmpty()) androidx.compose.ui.graphics.Color.Transparent else androidx.compose.ui.graphics.Color.Unspecified,
+        modifier = Modifier
+            .graphicsLayer {
+                rotationX = rotation
+                cameraDistance = 12f * density
+                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0.5f)
+            }
+            .drawWithContent {
+                val mid = size.height / 2f
+                clipRect(top = if (top) 0f else mid, bottom = if (top) mid else size.height) {
+                    this@drawWithContent.drawContent()
+                    // A turning flap darkens a little as it leaves the light.
+                    if (rotation != 0f) drawRect(androidx.compose.ui.graphics.Color.Black.copy(alpha = kotlin.math.abs(rotation) / 90f * 0.12f))
+                }
+            }
+            // An opaque card in the bar's colour, so a flap hides the half behind it.
+            .background(OloTone.band),
     )
 }
+
+/**
+ * The cards of [old] → [new]: pairs of characters, one per card. Runs of digits
+ * line up from the right (a missing digit is a blank card ""), everything else
+ * in order, so "2026년 9월" → "2026년 10월" flips only " 9" → "10".
+ */
+internal fun flapCells(old: String, new: String): List<Pair<String, String>> {
+    val a = flapRuns(old)
+    val b = flapRuns(new)
+    return (0 until maxOf(a.size, b.size)).flatMap { i ->
+        val x = a.getOrNull(i).orEmpty()
+        val y = b.getOrNull(i).orEmpty()
+        val digits = (x.isEmpty() || x[0].isDigit()) && (y.isEmpty() || y[0].isDigit())
+        val n = maxOf(x.length, y.length)
+        val xs = if (digits) x.padStart(n, BLANK) else x.padEnd(n, BLANK)
+        val ys = if (digits) y.padStart(n, BLANK) else y.padEnd(n, BLANK)
+        fun card(c: Char) = if (c == BLANK) "" else c.toString()
+        (0 until n).map { k -> card(xs[k]) to card(ys[k]) }
+    }
+}
+
+private const val BLANK = '\u0000'
+
+/** "2026년 10월" → ["2026", "년 ", "10", "월"]: digits and the rest, in runs. */
+private fun flapRuns(s: String): List<String> = Regex("\\d+|\\D+").findAll(s).map { it.value }.toList()
+
+/** One character's flip, and the delay from one changed character to the next. */
+private const val FLAP_MS = 260
+private const val FLAP_STAGGER_MS = 45
 
 private fun Modifier.graphicsFlip(): Modifier = this.graphicsLayer { scaleX = -1f }
 

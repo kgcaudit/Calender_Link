@@ -46,6 +46,41 @@ import kotlin.test.assertTrue
  */
 class ScreenshotTest {
     @Test
+    fun titleFlipsLikeAScoreboard() {
+        // docs/05 §5 (0.15.1): mid-flip frames of "2026년 9월" → "2026년 10월".
+        val title = androidx.compose.runtime.mutableStateOf("2026년 9월")
+        val order = androidx.compose.runtime.mutableStateOf(0)
+        val scene = ImageComposeScene(width = 600, height = 160, density = Density(2.625f)) {
+            OloTheme(darkTheme = false) {
+                Surface(Modifier.fillMaxSize(), color = app.olo.calendar.design.OloTone.band) {
+                    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                        app.olo.calendar.ui.FlipTitle(title.value, order.value)
+                    }
+                }
+            }
+        }
+        scene.render(0)
+        title.value = "2026년 10월"; order.value = 1
+        val t0 = 16_000_000L
+        scene.render(t0)
+        (0..14).map { it * 20 }.forEach { ms ->
+            val img = scene.render(t0 + ms * 1_000_000L)
+            val out = File("build/screens/flip-$ms.png")
+            out.parentFile.mkdirs()
+            out.writeBytes(img.encodeToData(EncodedImageFormat.PNG)!!.bytes)
+        }
+        // Back a month: the bottom halves rise instead.
+        title.value = "2026년 9월"; order.value = 0
+        val t1 = t0 + 1_000_000_000L
+        scene.render(t1)
+        listOf(40, 120).forEach { ms ->
+            val img = scene.render(t1 + ms * 1_000_000L)
+            File("build/screens/flip-back-$ms.png").writeBytes(img.encodeToData(EncodedImageFormat.PNG)!!.bytes)
+        }
+        scene.close()
+    }
+
+    @Test
     fun editorWithLunarRepeat() {
         // docs/11: "음력 매년" chosen for a birthday on lunar 8/15.
         val scene = ImageComposeScene(width = 1080, height = 2340, density = Density(2.625f)) {

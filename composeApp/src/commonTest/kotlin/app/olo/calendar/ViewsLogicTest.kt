@@ -64,4 +64,14 @@ class ViewsLogicTest {
         p.saveSettings(s)
         assertEquals(s, p.loadSettings())
     }
+
+    @Test
+    fun scoreboardTitleFlipsOnlyTheDigitsThatChange() {
+        // Digits line up from the right, so "월" keeps its card.
+        val cells = app.olo.calendar.ui.flapCells("2026년 9월", "2026년 10월")
+        assertEquals(listOf("2", "0", "2", "6", "년", " ", "", "9", "월"), cells.map { it.first })
+        assertEquals(listOf("2", "0", "2", "6", "년", " ", "1", "0", "월"), cells.map { it.second })
+        assertEquals(2, cells.count { it.first != it.second })
+        assertEquals(3, app.olo.calendar.ui.flapCells("2026년 12월", "2027년 1월").count { it.first != it.second })
+    }
 }
