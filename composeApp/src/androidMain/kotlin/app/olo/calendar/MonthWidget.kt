@@ -173,6 +173,8 @@ private val HEADER_H = 44.dp
 private val WEEKDAY_H = 20.dp
 private val NUMBER_H = 20.dp
 private val LANE_H = 18.dp
+/** A lane with room for two lines of a long title (docs/13 §9). */
+private val LANE2_H = 32.dp
 private val STATUS_H = 28.dp
 
 @Composable
@@ -258,8 +260,14 @@ private fun WeekView(context: Context, d: MonthData, week: List<LocalDate>, colW
         Row(GlanceModifier.fillMaxWidth().height(NUMBER_H)) {
             week.forEachIndexed { i, day -> DayNumber(context, d, day, colW, layout.hiddenPerDay[i]) }
         }
-        for (lane in 0 until lanes) {
-            LaneRow(context, d, week, layout.segments.filter { it.lane == lane }.sortedBy { it.startCol }, colW)
+        // Spare height goes to the lanes whose titles would be cut, top first: two lines instead of "…".
+        val byLane = (0 until lanes).map { lane -> layout.segments.filter { it.lane == lane }.sortedBy { it.startCol } }
+        val used = byLane.indexOfLast { it.isNotEmpty() } + 1
+        var spare = weekH - NUMBER_H - 1.dp - LANE_H * used
+        byLane.forEachIndexed { lane, segs ->
+            val two = lane < used && spare >= LANE2_H - LANE_H && segs.any { s -> titleCut(s, colW) }
+            if (two) spare -= LANE2_H - LANE_H
+            LaneRow(context, d, week, segs, colW, if (two) LANE2_H else LANE_H)
         }
         // The blank under a day still belongs to it.
         Row(GlanceModifier.fillMaxWidth().defaultWeight()) {
@@ -286,7 +294,8 @@ private fun DayNumber(context: Context, d: MonthData, day: LocalDate, colW: Dp, 
     ) {
         // Today: the app's Clay tile behind the number.
         Box(
-            GlanceModifier.height(20.dp).padding(horizontal = 4.dp).then(if (isToday) GlanceModifier.background(Clay).cornerRadius(5.dp) else GlanceModifier),
+            // Always a background: a launcher re-applying the update keeps yesterday's tile otherwise.
+            GlanceModifier.height(20.dp).padding(horizontal = 4.dp).background(if (isToday) Clay else Clear).cornerRadius(5.dp),
             contentAlignment = Alignment.Center,
         ) {
             Text("${day.dayOfMonth}", style = TextStyle(color = color, fontSize = 14.sp, fontWeight = FontWeight.Bold), maxLines = 1)
@@ -301,43 +310,58 @@ private fun DayNumber(context: Context, d: MonthData, day: LocalDate, colW: Dp, 
 
 /** One row of bars: each event across its days (long events as one bar); a free day is a blank that opens it. */
 @Composable
-private fun LaneRow(context: Context, d: MonthData, week: List<LocalDate>, segments: List<WeekSegment>, colW: Dp) {
-    Row(GlanceModifier.fillMaxWidth().height(LANE_H)) {
+private fun LaneRow(context: Context, d: MonthData, week: List<LocalDate>, segments: List<WeekSegment>, colW: Dp, height: Dp) {
+    Row(GlanceModifier.fillMaxWidth().height(height)) {
         var col = 0
         segments.forEach { s ->
-            while (col < s.startCol) { FreeDay(context, week[col], colW); col++ }
-            Bar(context, d, s, colW * (s.endCol - s.startCol + 1), week[s.startCol])
+            while (col < s.startCol) { FreeDay(context, week[col], colW, height); col++ }
+            Bar(context, d, s, colW * (s.endCol - s.startCol + 1), week[s.startCol], height)
             col = s.endCol + 1
         }
-        while (col < 7) { FreeDay(context, week[col], colW); col++ }
+        while (col < 7) { FreeDay(context, week[col], colW, height); col++ }
     }
 }
 
-@Composable
-private fun FreeDay(context: Context, day: LocalDate, colW: Dp) {
-    Box(GlanceModifier.width(colW).height(LANE_H).clickable(open(context, OpenRequest.Day(day)))) {}
+/** Whether [s]'s title, at 12sp, is wider than its bar (Glance cannot measure text: Hangul ≈ 12dp, Latin ≈ 7dp). */
+private fun titleCut(s: WeekSegment, colW: Dp): Boolean {
+    val room = colW * (s.endCol - s.startCol + 1) - 8.dp
+    val need = s.occurrence.title.sumOf { c ->
+        when {
+            c == ' ' -> 3.5
+            c.code >= 0x1100 -> 12.0
+            c.isUpperCase() -> 8.0
+            else -> 6.8
+        }
+    }
+    return need > room.value
 }
 
 @Composable
-private fun Bar(context: Context, d: MonthData, s: WeekSegment, width: Dp, day: LocalDate) {
+private fun FreeDay(context: Context, day: LocalDate, colW: Dp, height: Dp) {
+    Box(GlanceModifier.width(colW).height(height).clickable(open(context, OpenRequest.Day(day)))) {}
+}
+
+@Composable
+private fun Bar(context: Context, d: MonthData, s: WeekSegment, width: Dp, day: LocalDate, height: Dp) {
     val o = s.occurrence
     val faded = o.lastDay < d.month.firstDay || o.firstDay > d.month.plusMonths(1).firstDay.plus(-1, DateTimeUnit.DAY)
     val filled = o.allDay || s.spansDays
     Box(
-        GlanceModifier.width(width).height(LANE_H).padding(horizontal = 1.dp, vertical = 1.dp)
+        GlanceModifier.width(width).height(height).padding(horizontal = 1.dp, vertical = 1.dp)
             // A bar is part of its day: it opens the day (its events listed), as tapping the number does.
             .clickable(open(context, OpenRequest.Day(day))),
     ) {
         Row(
-            GlanceModifier.fillMaxSize().then(if (filled) GlanceModifier.background(softFill(o.colorArgb, faded)).cornerRadius(4.dp) else GlanceModifier),
+            GlanceModifier.fillMaxSize().background(if (filled) softFill(o.colorArgb, faded) else Clear).cornerRadius(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // A timed event: a thin strip in its colour, no fill (docs/13 §2-2).
-            if (!filled) Box(GlanceModifier.width(2.dp).fillMaxHeight().background(solid(o.colorArgb, faded))) {}
+            // Always there (0dp when filled), so a re-applied update never keeps a stale strip.
+            Box(GlanceModifier.width(if (filled) 0.dp else 2.dp).fillMaxHeight().background(if (filled) Clear else solid(o.colorArgb, faded))) {}
             Text(
                 o.title.ifBlank { "(제목 없음)" },
                 style = TextStyle(color = if (faded) Faint else OnBg, fontSize = 12.sp),
-                maxLines = 1, modifier = GlanceModifier.padding(start = 3.dp),
+                maxLines = if (height > LANE_H) 2 else 1, modifier = GlanceModifier.padding(start = 3.dp),
             )
         }
     }

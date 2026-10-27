@@ -213,6 +213,8 @@ internal val Divider: FixedColor @Composable get() = tone(0xFFE7E1D6, 0xFF2E2A25
 /** The plain card behind a timed event (docs/13 §2-2). */
 internal val Plain: FixedColor @Composable get() = tone(0xFFF1ECE5, 0xFF29251F)
 internal val Pill: FixedColor @Composable get() = Plain
+/** Set where a background is sometimes there, so a re-applied update clears it. */
+internal val Clear: FixedColor = FixedColor(Color.Transparent)
 
 @Composable
 private fun tone(day: Long, night: Long, alpha: Float = 1f): FixedColor = tone(Color(day).copy(alpha = alpha), Color(night).copy(alpha = alpha))
@@ -228,7 +230,7 @@ private fun tone(day: Color, night: Color): FixedColor = when (LocalWidgetStyle.
 @Composable
 internal fun widgetBg(): FixedColor {
     val s = LocalWidgetStyle.current
-    return if (!s.background) FixedColor(Color.Transparent) else tone(0xFFFBF9F5, 0xFF1C1A16, s.opacity / 100f)
+    return if (!s.background) Clear else tone(0xFFFBF9F5, 0xFF1C1A16, s.opacity / 100f)
 }
 
 /** A calendar colour filled softly behind an all-day event, stronger at night so it still reads. */
